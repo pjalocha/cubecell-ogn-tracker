@@ -98,7 +98,7 @@ static void NMEA_Process(void)
   if(NMEA.Parms==0) { PrintPOGNS(); return; }
   Parameters.ReadPOGNS(NMEA);
   PrintParameters();
-  // save Parameters to Flash
+  Parameters.WriteToFlash();
 }
 
 static void CONS_CtrlC(void)
@@ -182,6 +182,8 @@ void setup()
   Pixels.setPixelColor( 0, 255, 0, 0, 0);
   Pixels.show();
 
+  Parameters.ReadFromFlash();
+
   Display.init();
   Display.clear();
   Display.display();
@@ -194,8 +196,6 @@ void setup()
   GPS.begin(9600);           // GPS
 
   // EEPROM.begin(512);         //
-
-  Parameters.setDefault();
 
 }
 

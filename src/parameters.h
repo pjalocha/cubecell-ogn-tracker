@@ -332,6 +332,22 @@ uint16_t StratuxPort;
     return Err; }
 #endif // WITH_ESP32
 
+#ifdef ARDUINO                                                      // for CubeCell ASR6502
+  static const uint32_t FlashPageSize = 256;
+  static const uint32_t FlashAddr = 508*FlashPageSize;              // 510-511 are taken, we store just below
+
+  int8_t ReadFromFlash(void)
+  { const uint32_t Bytes=sizeof(FlashParameters);
+    FLASH_read_at(FlashAddr, (uint8_t *)this, Bytes);
+    if(calcCheckSum()) { setDefault(); return -1; }
+    return 1; }
+
+  int8_t WriteToFlash(void)
+  { const uint32_t Bytes=sizeof(FlashParameters);
+    setCheckSum();
+    FLASH_update(FlashAddr, (uint8_t *)this, Bytes); }
+#endif
+
 #ifdef WITH_SAMD21
   static uint32_t *DefaultFlashAddr(void) { return FlashStart+((uint32_t)(getFlashSizeKB()-1)<<8); } // the last KB
 
