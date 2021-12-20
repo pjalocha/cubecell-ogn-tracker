@@ -1,13 +1,13 @@
 #include "Arduino.h"
 #include <Wire.h>  
 
+#include "LoRaWan_APP.h"
+
 #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
 
 #include "HT_SSD1306Wire.h"
 #include "CubeCell_NeoPixel.h"
-
-// #include "EEPROM.h"
 
 #include "format.h"
 #include "nmea.h"
@@ -163,6 +163,21 @@ static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255, 255,   0, 0); Pixel
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 
 // ===============================================================================================
+// Radio
+
+static RadioEvents_t Radio_Events;
+
+static void Radio_TxDone(void)
+{ }
+
+static void Radio_TxTimeout(void)
+{ }
+
+static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR)
+{ }
+
+
+// ===============================================================================================
 
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
@@ -184,18 +199,23 @@ void setup()
 
   Parameters.ReadFromFlash();
 
-  Display.init();
+  Display.init();                                   //
   Display.clear();
   Display.display();
-
-  Display.setTextAlignment(TEXT_ALIGN_CENTER);
+  Display.setTextAlignment(TEXT_ALIGN_CENTER);      // 
   Display.setFont(ArialMT_Plain_16);
   Display.drawString(64, 32-16/2, "OGN-Tracker");
   Display.display();
 
-  GPS.begin(9600);           // GPS
+  GPS.begin(9600);                                  // GPS
 
-  // EEPROM.begin(512);         //
+  Radio_Events.TxDone    = Radio_TxDone;
+  Radio_Events.TxTimeout = Radio_TxTimeout;
+  Radio_Events.RxDone    = Radio_RxDone;
+  Radio.Init(&Radio_Events);
+  Radio.SetChannel(868400000);
+  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+  Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
 
 }
 
