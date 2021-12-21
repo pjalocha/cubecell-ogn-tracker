@@ -197,25 +197,34 @@ static int getInfoPacket(OGN1_Packet &Packet)
 // Radio
 
 // OGNv1 SYNC:       0x0AF3656C encoded in Manchester
-static const uint8_t OGN1_SYNC[8] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A };
+static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A, 0x00, 0x00 };
 // OGNv2 SYNC:       0xF56D3738 encoded in Machester
-static const uint8_t OGN2_SYNC[8] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A };
+static const uint8_t OGN2_SYNC[10] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A, 0x00, 0x00 };
 
-static const uint8_t PAW_SYNC [8] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71 };
+static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
 
 static RadioEvents_t Radio_Events;
 
 static void Radio_TxDone(void)
-{ Serial.println("Radio_TxDone()");
-}
+{ Serial.printf("%d: Radio_TxDone()\n", millis());
+  Radio.Rx(0); }
 
 static void Radio_TxTimeout(void)
-{ Serial.println("Radio_TxTimeout()");
-}
+{ Serial.printf("%d: Radio_TxTimeout()\n", millis());
+  Radio.Rx(0); }
 
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR)
-{ Serial.printf("Radio_RxDone( , %d, %d, %d)\n", Size, RSSI, SNR);
+{ Serial.printf("%d: Radio_RxDone( , %d, %d, %d)\n", millis(), Size, RSSI, SNR);
 }
+
+static void OGN_TxConfig(void)
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
+
+static void PAW_TxConfig(void)
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
+
+static void OGN_RxConfig(void)
+{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
 
 static int Radio_Transmit(const uint8_t *Data, uint8_t Len=26)
 { uint8_t Packet[2*Len];
@@ -243,17 +252,18 @@ void setup()
   // while (!Serial) { }                  // wait for USB serial port to connect
   Serial.println("OGN Tracker on HELTEC CubeCell");
 
-  // pinMode(RGB, OUTPUT);
+  pinMode(P3_3,INPUT);                    // push button
 
-  Pixels.begin();
+  Pixels.begin();                         // RGB LED
   Pixels.clear();
   Pixels.setBrightness(0x08);
-  Pixels.setPixelColor( 0, 255, 0, 0, 0);
-  Pixels.show();
+  LED_Green();
+  // Pixels.setPixelColor( 0, 255, 0, 0, 0); // Green
+  // Pixels.show();
 
-  Parameters.ReadFromFlash();
+  Parameters.ReadFromFlash();             // read parameters from Flash
 
-  Display.init();                                   //
+  Display.init();                                   // OLED
   Display.clear();
   Display.display();
   Display.setTextAlignment(TEXT_ALIGN_CENTER);      // 
@@ -263,13 +273,13 @@ void setup()
 
   GPS.begin(38400);                                  // GPS
 
-  Radio_Events.TxDone    = Radio_TxDone;
+  Radio_Events.TxDone    = Radio_TxDone;             // TRX
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
   Radio.Init(&Radio_Events);
   Radio.SetChannel(868400000);
-  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC);
-  Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC);
+  OGN_TxConfig();
+  OGN_RxConfig();
 
 }
 
@@ -290,10 +300,17 @@ void loop()
     { if(GPS.date.isValid()) LED_Green();
                        else  LED_Yellow();
       // here we start the slot just after the GPS sent its data
-      GPS_Display();
+      // printf("%d: Batt\n", millis());
+      uint16_t BattVolt = getBatteryVoltage();                    // [mV]
+      // printf("BattVolt=%d mV\n", BattVolt);
+      // printf("%d: OLED\n", millis());
+      GPS_Display();                                              //
       if(getInfoPacket(TxPacket.Packet))
       { TxPacket.Packet.Whiten(); TxPacket.calcFEC();
+        // printf("%d: Radio\n", millis());
         Radio_Transmit(TxPacket); }
+      // printf("%d:\n", millis());
+      LED_OFF();
       GPS_Done=1; }
   }
 
