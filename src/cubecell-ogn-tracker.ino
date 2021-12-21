@@ -11,6 +11,8 @@
 
 #include "format.h"
 #include "nmea.h"
+#include "manchester.h"
+#include "ogn1.h"
 
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
@@ -31,8 +33,8 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
 static FlashParameters Parameters;                                            // parameters address, type, etc.
 
-static Air530Class GPS;                                                       // GPS
-// Air530ZClass GPS;
+// static Air530Class GPS;                                                       // GPS
+static Air530ZClass GPS;
 
 static SSD1306Wire Display(0x3c, 500000, SDA, SCL, GEOMETRY_128_64, GPIO10 ); // OLED: addr , freq , i2c group , resolution , rst
 
@@ -163,19 +165,71 @@ static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255, 255,   0, 0); Pixel
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 
 // ===============================================================================================
+// OGN packets
+
+static uint16_t InfoParmIdx = 0;            // the round-robin index to info records in info packets
+
+static int ReadInfo(OGN1_Packet &Packet)
+{ Packet.clrInfo();
+  uint8_t ParmIdx;
+  for( ParmIdx=InfoParmIdx; ; )
+  { const char *Parm = Parameters.InfoParmValue(ParmIdx);
+    if(Parm)
+    { if(Parm[0])
+      { int Add=Packet.addInfo(Parm, ParmIdx); if(Add==0) break; }
+    }
+    ParmIdx++; if(ParmIdx>=Parameters.InfoParmNum) ParmIdx=0;
+    if(ParmIdx==InfoParmIdx) break;
+  }
+  InfoParmIdx = ParmIdx;
+  Packet.setInfoCheck();
+  return Packet.Info.DataChars; }                                      // zero => no info parameters were stored
+
+static int getInfoPacket(OGN1_Packet &Packet)
+{ Packet.HeaderWord = 0;
+  Packet.Header.Address = Parameters.Address;
+  Packet.Header.AddrType = Parameters.AddrType;
+  Packet.Header.NonPos = 1;
+  Packet.calcAddrParity();
+  return ReadInfo(Packet); }
+
+// ===============================================================================================
 // Radio
+
+// OGNv1 SYNC:       0x0AF3656C encoded in Manchester
+static const uint8_t OGN1_SYNC[8] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A };
+// OGNv2 SYNC:       0xF56D3738 encoded in Machester
+static const uint8_t OGN2_SYNC[8] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A };
+
+static const uint8_t PAW_SYNC [8] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71 };
 
 static RadioEvents_t Radio_Events;
 
 static void Radio_TxDone(void)
-{ }
+{ Serial.println("Radio_TxDone()");
+}
 
 static void Radio_TxTimeout(void)
-{ }
+{ Serial.println("Radio_TxTimeout()");
+}
 
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR)
-{ }
+{ Serial.printf("Radio_RxDone( , %d, %d, %d)\n", Size, RSSI, SNR);
+}
 
+static int Radio_Transmit(const uint8_t *Data, uint8_t Len=26)
+{ uint8_t Packet[2*Len];
+  uint8_t PktIdx=0;
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { uint8_t Byte=Data[Idx];
+    Packet[PktIdx++]=ManchesterEncode[Byte>>4];                   // software manchester encode every byte
+    Packet[PktIdx++]=ManchesterEncode[Byte&0x0F];
+  }
+  Radio.Send(Packet, 2*Len);
+  return 0; }
+
+static int Radio_Transmit(OGN_TxPacket<OGN1_Packet> &TxPacket)
+{ return Radio_Transmit(TxPacket.Byte(), TxPacket.Bytes); }
 
 // ===============================================================================================
 
@@ -207,17 +261,19 @@ void setup()
   Display.drawString(64, 32-16/2, "OGN-Tracker");
   Display.display();
 
-  GPS.begin(9600);                                  // GPS
+  GPS.begin(38400);                                  // GPS
 
   Radio_Events.TxDone    = Radio_TxDone;
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
   Radio.Init(&Radio_Events);
   Radio.SetChannel(868400000);
-  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
+  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC);
+  Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC);
 
 }
+
+static OGN_TxPacket<OGN1_Packet> TxPacket;
 
 static bool GPS_Done=0;
 
@@ -233,7 +289,11 @@ void loop()
   { if(GPS_Idle>5)
     { if(GPS.date.isValid()) LED_Green();
                        else  LED_Yellow();
+      // here we start the slot just after the GPS sent its data
       GPS_Display();
+      if(getInfoPacket(TxPacket.Packet))
+      { TxPacket.Packet.Whiten(); TxPacket.calcFEC();
+        Radio_Transmit(TxPacket); }
       GPS_Done=1; }
   }
 
