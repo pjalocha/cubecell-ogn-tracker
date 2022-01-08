@@ -44,27 +44,28 @@ static SSD1306Wire Display(0x3c, 500000, SDA, SCL, GEOMETRY_128_64, GPIO10 ); //
 
 static CubeCell_NeoPixel Pixels(1, RGB, NEO_GRB + NEO_KHZ800);                // three-color LED
 
-static char Line[256];                                                        // for printing
+static char Line[256];                                                        // for OLED abd console printing
 
-void VextON(void)                   // Vext controls OLED power
+static void VextON(void)                   // Vext controls OLED power
 { pinMode(Vext,OUTPUT);
   digitalWrite(Vext, LOW); }
 
-void VextOFF(void)                  // Vext default OFF
+static void VextOFF(void)                  // Vext default OFF
 { pinMode(Vext,OUTPUT);
   digitalWrite(Vext, HIGH); }
 
-/*
-int GPS_UART_Read(uint8_t &Byte)  // read byte from the GPS serial port
-{ int Ret=GPS.read();
-  if(Ret>=0) Byte=Ret;
-  return Ret; }
+// ===============================================================================================
 
-void GPS_UART_Write(char Byte) // write byte to the GPS serial port
-{ GPS.write(Byte); }
+static union
+{ uint64_t Word;
+  struct
+  { uint32_t RX;
+    uint32_t GPS;
+  } ;
+} Random = { 0x0123456789ABCDEF };
 
-void  GPS_UART_SetBaudrate(int BaudRate) { GPS.begin(BaudRate); }
-*/
+// static uint32_t RX_Random = 0x12345678;
+// static uint32_t GPS_Random = 0x12345678; // random number from the LSB of the GPS data
 
 // ===============================================================================================
 // CONSole UART
@@ -136,7 +137,6 @@ static uint32_t GPS_Longitude;         // [1/60000deg]
 static uint32_t GPS_Altitude;          // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
-static uint32_t GPS_Random = 0x12345678; // random number from the LSB of the GPS data
 static uint8_t  GPS_Satellites = 0;
 
 static uint32_t GPS_PPS_ms = 0;                        // [ms]  Time estimate of the most recent PPS
@@ -163,26 +163,75 @@ static void GPS_Next(void)
   if(GPS_Pipe[GPS_Ptr].isValid() && GPS_Pipe[Next].isValid()) GPS_Pipe[GPS_Ptr].calcDifferentials(GPS_Pipe[Next]);
   GPS_Ptr=Next; }
 
-static void OLED_GPS(void)                             // display time, date and GPS data/status
+static void GPS_Random_Update(uint8_t Bit)
+{ Random.GPS = (Random.GPS<<1) | (Bit&1); }
+
+static void GPS_Random_Update(const GPS_Position &Pos)
+{ GPS_Random_Update(Pos.Altitude);
+  GPS_Random_Update(Pos.Speed);
+  GPS_Random_Update(Pos.Latitude);
+  GPS_Random_Update(Pos.Longitude);
+  XorShift32(Random.GPS); }
+
+static void OLED_Info(void)
+{ Display.clear();
+  Display.setFont(ArialMT_Plain_16);
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  uint8_t VertPos=0;
+  Parameters.Print(Line); Line[10]=0;
+  Display.drawString(0, VertPos, Line); VertPos+=16;
+  if(Parameters.Reg[0])
+  { uint8_t Len=Format_String(Line, "Reg: ");
+    Len+=Format_String(Line+Len, Parameters.Reg);
+    Line[Len]=0;
+    Display.drawString(0, VertPos, Line); VertPos+=16; }
+  if(Parameters.Pilot[0])
+  { uint8_t Len=Format_String(Line, "Pilot: ");
+    Len+=Format_String(Line+Len, Parameters.Pilot);
+    Line[Len]=0;
+    Display.drawString(0, VertPos, Line); VertPos+=16; }
+  Display.display(); }
+
+static void OLED_GPS(const GPS_Position &GPS)          // display time, date and GPS data/status
 { Display.clear();
   // Display.setFont(ArialMT_Plain_10);
   Display.setFont(ArialMT_Plain_16);
-  const GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
-  char Line[16];
+  // const GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
+  // char Line[16];
   if(GPS.isTimeValid())
-  { int Idx = sprintf(Line, "%02d:%02d:%02d", GPS.Hour, GPS.Min, GPS.Sec);
-    Line[Idx] = 0; }
+  { uint8_t Len = GPS.FormatDate(Line, ':');
+    // int Idx = sprintf(Line, "%02d:%02d:%02d", GPS.Hour, GPS.Min, GPS.Sec);
+  }
   else { strcpy(Line, "--:--:--"); }
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
-  Display.drawString(128, 0, Line);
+  Display.drawString(128, 0, Line);                           // 1st line right corner: date
   if(GPS.isTimeValid() && GPS.isDateValid())
-  { int Idx = sprintf(Line, "%02d.%02d.%02d", GPS.Day, GPS.Month, GPS.Year);
-    Line[Idx] = 0; }
+  { uint8_t Len = GPS.FormatTime(Line, '.');
+    // int Idx = sprintf(Line, "%02d.%02d.%02d", GPS.Day, GPS.Month, GPS.Year);
+    Line[Len-4] = 0; }
   else { strcpy(Line, "--.--.--"); }
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
-  Display.drawString(0, 0, Line);
+  Display.drawString(0, 0, Line);                             // 1st line left corner: time
   if(GPS.isValid())
-  { }
+  { uint8_t Len=0;
+    Line[Len++]='[';
+    Len+=Format_SignDec(Line+Len, GPS.Latitude/6, 7, 5);
+    Line[Len++]=',';
+    Len+=Format_SignDec(Line+Len, GPS.Longitude/6, 8, 5);
+    Line[Len++]=']';
+    Line[Len]=0;
+    Display.drawString(0, 24, Line);                          // 2nd line: GPS position
+    Len=0;
+    Len+=Format_SignDec(Line+Len, GPS.Altitude/10, 1, 0, 1);
+    Line[Len++]='m';
+    Line[Len++]=' ';
+    Len+=Format_UnsDec(Line+Len, GPS.Satellites);
+    Line[Len++]='s';
+    Line[Len++]='a';
+    Line[Len++]='t';
+    Line[Len]=0;
+    Display.drawString(0, 48, Line);                         // 3rd line: altitude and number of satellites
+  }
   Display.display(); }
 
 // ===============================================================================================
@@ -190,9 +239,9 @@ static void OLED_GPS(void)                             // display time, date and
 
 static void LED_OFF   (void) { Pixels.setPixelColor( 0,   0,   0,   0, 0); Pixels.show(); }
 static void LED_Red   (void) { Pixels.setPixelColor( 0, 255,   0,   0, 0); Pixels.show(); }
-static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  64,   0, 0); Pixels.show(); }
-static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  64,   0, 0); Pixels.show(); }
-static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  64,   0, 0); Pixels.show(); }
+static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
+static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  96,   0, 0); Pixels.show(); }
+static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 
 // ===============================================================================================
@@ -230,7 +279,6 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produc
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
   Packet.calcAddrParity();
   Packet.Position.AcftType = Parameters.AcftType;                      // aircraft type
-  if(!GPS.isValid()) return 0;
   GPS.Encode(Packet);
   return 1; }
 
@@ -264,12 +312,10 @@ static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and 
 static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
 { RelayQueue.cleanTime((Time-Delay)%60); }            // remove packets 20(default) seconds into the past
 
-static uint32_t RX_Random = 0x12345678;
-
 static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
 { if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
-  XorShift32(RX_Random);                              // produce a new random number
-  uint8_t Idx=RelayQueue.getRand(RX_Random);          // get weight-random packet from the relay queue
+  XorShift32(Random.RX);                              // produce a new random number
+  uint8_t Idx=RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
   if(RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
   memcpy(Packet->Packet.Byte(), RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
   Packet->Packet.Header.Relay=1;                      // increment the relay count (in fact we only do single relay)
@@ -296,12 +342,12 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   RxPktData.msTime = millis()-GPS_PPS_ms;
   RxPktData.Channel = 0;
   RxPktData.RSSI = -2*RSSI;
-  RX_Random = (RX_Random*RSSI) ^ (~RSSI); XorShift32(RX_Random);
+  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift32(Random.RX);
   uint8_t RxPacketIdx  = RelayQueue.getNew();                   // get place for this new packet
   OGN_RxPacket<OGN1_Packet> *RxPacket = RelayQueue[RxPacketIdx];
   uint8_t DecErr = RxPktData.Decode(*RxPacket, Decoder);        // LDPC FEC decoder
-  Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X %08X\n",
-          millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, RX_Random);
+  Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
+          millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
   if(DecErr || RxPacket->RxErr>=10 ) { LED_OFF(); return; }       // if FEC not correctly decoded or too many bit errors then give up
   uint8_t OwnPacket = ( RxPacket->Packet.Header.Address  == Parameters.Address  )       // is it my own packet (through a relay) ?
                    && ( RxPacket->Packet.Header.AddrType == Parameters.AddrType );
@@ -363,6 +409,7 @@ void setup()
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
   // while (!Serial) { }                  // wait for USB serial port to connect
+
   Serial.println("OGN Tracker on HELTEC CubeCell");
 
   pinMode(USER_KEY, INPUT);               // push button
@@ -375,13 +422,15 @@ void setup()
   // Pixels.show();
 
   Display.init();                         // Start the OLED
+  OLED_Info();
+/*
   Display.clear();
   Display.display();
-  Display.setTextAlignment(TEXT_ALIGN_CENTER);      // 
+  Display.setTextAlignment(TEXT_ALIGN_CENTER);      //
   Display.setFont(ArialMT_Plain_16);
   Display.drawString(64, 32-16/2, "OGN-Tracker");
   Display.display();
-
+*/
   GPS.begin(38400);                                  // Start the GPS
 
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);          // set the frequency plan from the parameters	
@@ -390,9 +439,10 @@ void setup()
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
   Radio.Init(&Radio_Events);
-  Radio.SetChannel(868400000);
+  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
   OGN_RxConfig();
+  Radio.Rx(0);
 
 }
 
@@ -407,14 +457,15 @@ void loop()
   if(GPS_Process()==0) { GPS_Idle++; delay(1); }
                   else { GPS_Idle=0; }
   if(GPS_Done)                                                    // if state is GPS not sending data
-  { if(GPS_Idle<3)
+  { if(GPS_Idle<3)                                                // GPS (re)started sending data
     { GPS_Done=0;                                                 // change the state to GPS is sending data
       GPS_PPS_ms=millis()-Parameters.PPSdelay;                    // record the est. PPS time
       GPS_PPS_Time++; }
-  } // GPS started sending data
+  }
   else
   { if(GPS_Idle>5)                                                // GPS stopped sending data
-    { GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
+    { xorshift64(Random.Word);
+      GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
       GPS_Satellites = GPS.Satellites;
       if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_Time = GPS.getUnixTime(); }    // if time and date are valid
                                            else  { LED_Yellow(); }
@@ -426,24 +477,27 @@ void loop()
         GPS_GeoidSepar= GPS.GeoidSeparation;
         GPS_LatCosine = GPS.LatitudeCosine;
         Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude); // set Radio frequency plan
+        GPS_Random_Update(GPS);
         getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
         TxPosPacket.Packet.Whiten();
-        TxPosPacket.calcFEC();
+        TxPosPacket.calcFEC();                                    // position packet is ready for transmission
       }
       // here we start the slot just after the GPS sent its data
       // printf("%d: Batt\n", millis());
       BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
       // printf("BattVolt=%d mV\n", BattVolt);
       // printf("%d: OLED\n", millis());
-      OLED_GPS();                                                 // display GPS data on the OLED
-      if(getInfoPacket(TxInfoPacket.Packet))
-      { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
+      OLED_GPS(GPS);                                              // display GPS data on the OLED
+      if(getInfoPacket(TxInfoPacket.Packet))                      // prepare next information packet
+      { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC(); }
         // printf("%d: Radio\n", millis());
-        OGN_Transmit(TxInfoPacket); }
+      if(GPS.isValid()) OGN_Transmit(TxPosPacket);                // transmit either position packet
+                   else OGN_Transmit(TxInfoPacket);               // or information packet
       // printf("%d:\n", millis());
       LED_OFF();
       GPS_Next();
-      GPS_Done=1; }
+      GPS_Done=1;
+    }
   }
 
 

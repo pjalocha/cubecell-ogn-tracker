@@ -672,6 +672,26 @@ class GPS_Time
    void setDefaultDate() { Year=00; Month=1; Day=1; } // default Date is 01-JAN-2000
    void setDefaultTime() { Hour=0;  Min=0;   Sec=0; mSec=0; } // default Time is 00:00:00.00
 
+   uint8_t FormatDate(char *Out, char Sep='.') const
+   { uint8_t Len=0;
+     Len+=Format_UnsDec(Out+Len, Day, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, Month, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, Year, 2);
+     Out[Len]=0; return Len; }
+
+   uint8_t FormatTime(char *Out, char Sep=':') const
+   { uint8_t Len=0;
+     Len+=Format_UnsDec(Out+Len, Hour, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, Min, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, Sec, 2);
+     Out[Len++]='.';
+     Len+=Format_UnsDec(Out+Len, mSec, 3);
+     Out[Len]=0; return Len; }
+
    bool isTimeValid(void) const                      // is the GPS time-of-day valid
    { return (Hour>=0) && (Min>=0) && (Sec>=0); }     // all data must have been correctly read: negative means not correctly read)
 
