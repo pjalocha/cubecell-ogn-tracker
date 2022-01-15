@@ -182,21 +182,14 @@ static void OLED_Info(void)
   uint8_t VertPos=0;
   Parameters.Print(Line); Line[10]=0;
   Display.drawString(0, VertPos, Line); VertPos+=16;
-  if(Parameters.Reg[0])
-  { uint8_t Len=Format_String(Line, "Reg: ");
-    Len+=Format_String(Line+Len, Parameters.Reg);
-    Line[Len]=0;
-    Display.drawString(0, VertPos, Line); VertPos+=16; }
-  if(Parameters.Pilot[0])
-  { uint8_t Len=Format_String(Line, "Pilot: ");
-    Len+=Format_String(Line+Len, Parameters.Pilot);
-    Line[Len]=0;
-    Display.drawString(0, VertPos, Line); VertPos+=16; }
-  if(Parameters.Base[0])
-  { uint8_t Len=Format_String(Line, "Base: ");
-    Len+=Format_String(Line+Len, Parameters.Base);
-    Line[Len]=0;
-    Display.drawString(0, VertPos, Line); VertPos+=16; }
+  for(uint8_t Idx=0; Idx<Parameters.InfoParmNum; Idx++)
+  { if(Parameters.InfoParmValue(Idx)[0])
+    { uint8_t Len=Format_String(Line, OGN_Packet::InfoParmName(Idx));
+      Line[Len++]=':'; Line[Len++]=' ';
+      Len+=Format_String(Line+Len, Parameters.InfoParmValue(Idx));
+      Line[Len]=0;
+      Display.drawString(0, VertPos, Line); VertPos+=16; }
+  }
   Display.display(); }
 
 static void OLED_GPS(const GPS_Position &GPS)          // display time, date and GPS data/status
