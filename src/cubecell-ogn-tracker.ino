@@ -29,7 +29,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
 #define DEFAULT_CONbaud    115200         // [bps]
-#define DEFAULT_PPSdelay       80         // [ms]
+#define DEFAULT_PPSdelay      100         // [ms]
 #define DEFAULT_FreqPlan        1
 
 #include "parameters.h"
@@ -53,6 +53,8 @@ static void VextON(void)                   // Vext controls OLED power
 static void VextOFF(void)                  // Vext default OFF
 { pinMode(Vext,OUTPUT);
   digitalWrite(Vext, HIGH); }
+
+static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
 
 // ===============================================================================================
 
@@ -139,7 +141,7 @@ static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;
 
-static uint32_t GPS_PPS_ms = 0;                        // [ms]  Time estimate of the most recent PPS
+static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
 static uint32_t GPS_PPS_Time = 0;                      // [sec] Unix time which corresponds to the most recent PPS
 
 static uint32_t GPS_Idle=0;
@@ -194,20 +196,15 @@ static void OLED_Info(void)
 
 static void OLED_GPS(const GPS_Position &GPS)          // display time, date and GPS data/status
 { Display.clear();
-  // Display.setFont(ArialMT_Plain_10);
   Display.setFont(ArialMT_Plain_16);
-  // const GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
-  // char Line[16];
   if(GPS.isTimeValid())
   { uint8_t Len = GPS.FormatDate(Line, ':');
-    // int Idx = sprintf(Line, "%02d:%02d:%02d", GPS.Hour, GPS.Min, GPS.Sec);
   }
   else { strcpy(Line, "--:--:--"); }
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
   Display.drawString(128, 0, Line);                           // 1st line right corner: date
   if(GPS.isTimeValid() && GPS.isDateValid())
   { uint8_t Len = GPS.FormatTime(Line, '.');
-    // int Idx = sprintf(Line, "%02d.%02d.%02d", GPS.Day, GPS.Month, GPS.Year);
     Line[Len-4] = 0; }
   else { strcpy(Line, "--.--.--"); }
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -220,18 +217,28 @@ static void OLED_GPS(const GPS_Position &GPS)          // display time, date and
     Len+=Format_SignDec(Line+Len, GPS.Longitude/6, 8, 5);
     Line[Len++]=']';
     Line[Len]=0;
-    Display.drawString(0, 24, Line);                          // 2nd line: GPS position
-    Len=0;
+    Display.drawString(0, 16, Line); }                        // 2nd line: GPS position
+  if(GPS.isValid())
+  { uint8_t Len=0;
     Len+=Format_SignDec(Line+Len, GPS.Altitude/10, 1, 0, 1);
-    Line[Len++]='m';
-    Line[Len++]=' ';
+    Line[Len++]='m'; Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_LEFT);
+    Display.drawString(0, 32, Line);
+    Len=0;
     Len+=Format_UnsDec(Line+Len, GPS.Satellites);
-    Line[Len++]='s';
-    Line[Len++]='a';
-    Line[Len++]='t';
-    Line[Len]=0;
-    Display.drawString(0, 48, Line);                         // 3rd line: altitude and number of satellites
-  }
+    Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+    Display.drawString(128, 32, Line); }                       // 3rd line: altitude and number of satellites
+  { uint8_t Len=0;
+    Len+=Format_UnsDec(Line+Len, RelayQueue.size());
+    Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_LEFT);
+    Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts, battery
+    Len=0;
+    Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2);
+    Line[Len++]= 'V'; Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+    Display.drawString(128, 48, Line); }
   Display.display(); }
 
 // ===============================================================================================
@@ -307,8 +314,6 @@ static void Radio_TxTimeout(void)
 static LDPC_Decoder      Decoder;      // decoder and error corrector for the OGN Gallager/LDPC code
 static RFM_FSK_RxPktData RxPktData;
 
-static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
-
 static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
 { RelayQueue.cleanTime((Time-Delay)%60); }            // remove packets 20(default) seconds into the past
 
@@ -338,16 +343,16 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
     RxPktData.Data[Idx]=(ByteH<<4) | ByteL;
     RxPktData.Err [Idx]=(ErrH <<4) | ErrL ;
   }
-  RxPktData.Time = GPS_PPS_Time;
-  RxPktData.msTime = millis()-GPS_PPS_ms;
+  RxPktData.Time = GPS_PPS_Time;                                         // [sec]
+  RxPktData.msTime = millis()-GPS_PPS_ms;                                // [ms] time since PPS
   RxPktData.Channel = 0;
   RxPktData.RSSI = -2*RSSI;
   Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift32(Random.RX);
   uint8_t RxPacketIdx  = RelayQueue.getNew();                   // get place for this new packet
   OGN_RxPacket<OGN1_Packet> *RxPacket = RelayQueue[RxPacketIdx];
   uint8_t DecErr = RxPktData.Decode(*RxPacket, Decoder);        // LDPC FEC decoder
-  Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
-          millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
+  // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
+  //         millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
   if(DecErr || RxPacket->RxErr>=10 ) { LED_OFF(); return; }       // if FEC not correctly decoded or too many bit errors then give up
   uint8_t OwnPacket = ( RxPacket->Packet.Header.Address  == Parameters.Address  )       // is it my own packet (through a relay) ?
                    && ( RxPacket->Packet.Header.AddrType == Parameters.AddrType );
@@ -450,6 +455,11 @@ static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoP
 
 static bool GPS_Done = 0;      // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
+static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
+
+static uint32_t TxTime0, TxTime1;
+static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
+
 void loop()
 {
   CONS_Proc();
@@ -488,17 +498,45 @@ void loop()
       // printf("BattVolt=%d mV\n", BattVolt);
       // printf("%d: OLED\n", millis());
       OLED_GPS(GPS);                                              // display GPS data on the OLED
-      if(getInfoPacket(TxInfoPacket.Packet))                      // prepare next information packet
-      { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC(); }
         // printf("%d: Radio\n", millis());
-      if(GPS.isValid()) OGN_Transmit(TxPosPacket);                // transmit either position packet
-                   else OGN_Transmit(TxInfoPacket);               // or information packet
-      // printf("%d:\n", millis());
+      RF_Slot=0;
+      Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
+      OGN_TxConfig();
+      OGN_RxConfig();
+      Radio.Rx(0);
+      // printf("Slot #0: %d\n", millis());
+      TxTime0 = Random.RX  % 399; TxTime0 += 400;
+      TxTime1 = Random.GPS % 399; TxTime1 += 800;
+      TxPkt0=TxPkt1=0;
+      if(GPS.isValid()) TxPkt0 = TxPkt1 = &TxPosPacket;
+      static uint8_t InfoTxBackOff=0;
+      if(InfoTxBackOff) InfoTxBackOff--;
+      else if(getInfoPacket(TxInfoPacket.Packet))                      // prepare next information packet
+      { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
+        if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
+                      else TxPkt0 = &TxInfoPacket;
+        InfoTxBackOff = 15 + (Random.RX&3); }
       LED_OFF();
       GPS_Next();
       GPS_Done=1;
     }
   }
 
+  uint32_t SysTime=millis();
+  if(RF_Slot==0)
+  { if(TxPkt0 && SysTime >= (GPS_PPS_ms+TxTime0))
+    { // printf("TX   #0: %d\n", SysTime);
+      OGN_Transmit(*TxPkt0); TxPkt0=0; }
+    else if(SysTime >= (GPS_PPS_ms+800))
+    { RF_Slot=1;
+      Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
+      Radio.Rx(0);
+      // printf("Slot #1: %d\n", SysTime);
+    }
+  } else
+  { if(TxPkt1 && SysTime >= (GPS_PPS_ms+TxTime1))
+    { // printf("TX   #1: %d\n", SysTime);
+      OGN_Transmit(*TxPkt1); TxPkt1=0; }
+  }
 
 }
