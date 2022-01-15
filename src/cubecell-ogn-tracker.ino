@@ -436,6 +436,8 @@ void setup()
   Parameters.ReadFromFlash();             // read parameters from Flash
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
+  Serial.setRxBufferSize(128);
+  // Serial.setTxBufferSize(128);
   // while (!Serial) { }                  // wait for USB serial port to connect
 
   Serial.println("OGN Tracker on HELTEC CubeCell");
