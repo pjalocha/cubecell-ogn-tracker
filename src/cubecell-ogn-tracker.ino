@@ -1,3 +1,6 @@
+// OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
+// Note: requires modifications to the core RF libraries which support OGN transmission and reception
+
 #include "Arduino.h"
 #include <Wire.h>
 
@@ -65,9 +68,6 @@ static union
     uint32_t GPS;
   } ;
 } Random = { 0x0123456789ABCDEF };
-
-// static uint32_t RX_Random = 0x12345678;
-// static uint32_t GPS_Random = 0x12345678; // random number from the LSB of the GPS data
 
 // ===============================================================================================
 // CONSole UART
@@ -192,43 +192,43 @@ static void OLED_Info(void)
     Len+=Format_String(Line+Len, Parameters.Pilot);
     Line[Len]=0;
     Display.drawString(0, VertPos, Line); VertPos+=16; }
+  if(Parameters.Base[0])
+  { uint8_t Len=Format_String(Line, "Base: ");
+    Len+=Format_String(Line+Len, Parameters.Base);
+    Line[Len]=0;
+    Display.drawString(0, VertPos, Line); VertPos+=16; }
   Display.display(); }
 
 static void OLED_GPS(const GPS_Position &GPS)          // display time, date and GPS data/status
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
   if(GPS.isTimeValid())
-  { uint8_t Len = GPS.FormatDate(Line, ':');
-  }
-  else { strcpy(Line, "--:--:--"); }
+  { uint8_t Len = GPS.FormatDate(Line, '.'); }
+  else { strcpy(Line, " no date "); }
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
   Display.drawString(128, 0, Line);                           // 1st line right corner: date
   if(GPS.isTimeValid() && GPS.isDateValid())
-  { uint8_t Len = GPS.FormatTime(Line, '.');
+  { uint8_t Len = GPS.FormatTime(Line, ':');
     Line[Len-4] = 0; }
-  else { strcpy(Line, "--.--.--"); }
+  else { strcpy(Line, " no time "); }
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   Display.drawString(0, 0, Line);                             // 1st line left corner: time
   if(GPS.isValid())
   { uint8_t Len=0;
-    Line[Len++]='[';
-    Len+=Format_SignDec(Line+Len, GPS.Latitude/6, 7, 5);
-    Line[Len++]=',';
-    Len+=Format_SignDec(Line+Len, GPS.Longitude/6, 8, 5);
-    Line[Len++]=']';
-    Line[Len]=0;
-    Display.drawString(0, 16, Line); }                        // 2nd line: GPS position
-  if(GPS.isValid())
-  { uint8_t Len=0;
+    Len+=Format_SignDec(Line+Len, GPS.Latitude/6, 7, 5); Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_LEFT);
+    Display.drawString(0, 16, Line);
+    Len+=Format_SignDec(Line+Len, GPS.Longitude/6, 8, 5); Line[Len]=0;
+    Display.drawString(0, 32, Line);
+    Len=0;
     Len+=Format_SignDec(Line+Len, GPS.Altitude/10, 1, 0, 1);
     Line[Len++]='m'; Line[Len]=0;
-    Display.setTextAlignment(TEXT_ALIGN_LEFT);
-    Display.drawString(0, 32, Line);
+    Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+    Display.drawString(128, 16, Line);
     Len=0;
     Len+=Format_UnsDec(Line+Len, GPS.Satellites);
     Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; Line[Len]=0;
-    Display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    Display.drawString(128, 32, Line); }                       // 3rd line: altitude and number of satellites
+    Display.drawString(128, 32, Line); }
   { uint8_t Len=0;
     Len+=Format_UnsDec(Line+Len, RelayQueue.size());
     Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
@@ -396,11 +396,33 @@ static int OGN_Transmit(OGN_TxPacket<OGN1_Packet> &TxPacket)
 
 // ===============================================================================================
 
+static void Sleep(void)
+{ GPS.end();
+  Radio.Sleep();
+  Display.stop();
+  detachInterrupt(RADIO_DIO_1);
+  LED_OFF(); // turnOffRGB();
+  pinMode(Vext, ANALOG);
+  pinMode(ADC, ANALOG);  
+  lowPowerHandler(); }
+
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; }
 
+static uint32_t Button_PrevSysTime=0;
+static uint32_t Button_PressTime=0;
+static bool Button_LowPower=0;
+
 static void Button_Process(void)
-{ 
-}
+{ uint32_t SysTime = millis();
+  if(!Button_isPressed())
+  { Button_PressTime=0;
+    Button_LowPower=0; }
+  else
+  { uint32_t Diff = SysTime-Button_PrevSysTime;
+    Button_PressTime += Diff;
+    if(Button_PressTime>=1000) Button_LowPower=1;
+  }
+  Button_PrevSysTime=SysTime; }
 
 // ===============================================================================================
 
@@ -428,14 +450,6 @@ void setup()
 
   Display.init();                         // Start the OLED
   OLED_Info();
-/*
-  Display.clear();
-  Display.display();
-  Display.setTextAlignment(TEXT_ALIGN_CENTER);      //
-  Display.setFont(ArialMT_Plain_16);
-  Display.drawString(64, 32-16/2, "OGN-Tracker");
-  Display.display();
-*/
   GPS.begin(38400);                                  // Start the GPS
 
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);          // set the frequency plan from the parameters	
@@ -462,8 +476,10 @@ static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
 
 void loop()
 {
-  CONS_Proc();
   Button_Process();
+  if(Button_LowPower) { Sleep(); return; }
+
+  CONS_Proc();
   if(GPS_Process()==0) { GPS_Idle++; delay(1); }
                   else { GPS_Idle=0; }
   if(GPS_Done)                                                    // if state is GPS not sending data
@@ -515,7 +531,13 @@ void loop()
       { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
         if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
                       else TxPkt0 = &TxInfoPacket;
-        InfoTxBackOff = 15 + (Random.RX&3); }
+        InfoTxBackOff = 15 + (Random.RX%3); }
+      static uint8_t RelayTxBackOff=0;
+      if(RelayTxBackOff) RelayTxBackOff--;
+      else if(GetRelayPacket(&TxRelPacket))
+      { if(Random.RX&0x20) TxPkt1 = &TxRelPacket;
+                      else TxPkt0 = &TxRelPacket;
+        RelayTxBackOff = Random.RX%3; }
       LED_OFF();
       GPS_Next();
       GPS_Done=1;
