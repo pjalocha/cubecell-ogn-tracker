@@ -215,10 +215,11 @@ static void OLED_GPS(const GPS_Position &GPS)          // display time, date and
   Display.drawString(0, 0, Line);                             // 1st line left corner: time
   if(GPS.isValid())
   { uint8_t Len=0;
-    Len+=Format_SignDec(Line+Len, GPS.Latitude/6, 7, 5); Line[Len]=0;
+    Len+=Format_SignDec(Line+Len, GPS.Latitude/60, 6, 4); Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 16, Line);
-    Len+=Format_SignDec(Line+Len, GPS.Longitude/6, 8, 5); Line[Len]=0;
+    Len=0;
+    Len+=Format_SignDec(Line+Len, GPS.Longitude/60, 7, 4); Line[Len]=0;
     Display.drawString(0, 32, Line);
     Len=0;
     Len+=Format_SignDec(Line+Len, GPS.Altitude/10, 1, 0, 1);
@@ -403,7 +404,7 @@ static void Sleep(void)
   detachInterrupt(RADIO_DIO_1);
   LED_OFF(); // turnOffRGB();
   pinMode(Vext, ANALOG);
-  pinMode(ADC, ANALOG);  
+  pinMode(ADC, ANALOG);
   lowPowerHandler(); }
 
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; }
@@ -508,19 +509,16 @@ void loop()
         TxPosPacket.Packet.Whiten();
         TxPosPacket.calcFEC();                                    // position packet is ready for transmission
       }
-      // here we start the slot just after the GPS sent its data
-      // printf("%d: Batt\n", millis());
+      CONS_Proc();
       BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
-      // printf("BattVolt=%d mV\n", BattVolt);
-      // printf("%d: OLED\n", millis());
+      CONS_Proc();
       OLED_GPS(GPS);                                              // display GPS data on the OLED
-        // printf("%d: Radio\n", millis());
+      CONS_Proc();
       RF_Slot=0;
       Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
       OGN_TxConfig();
       OGN_RxConfig();
       Radio.Rx(0);
-      // printf("Slot #0: %d\n", millis());
       TxTime0 = Random.RX  % 399; TxTime0 += 400;
       TxTime1 = Random.GPS % 399; TxTime1 += 800;
       TxPkt0=TxPkt1=0;
