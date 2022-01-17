@@ -345,7 +345,7 @@ uint16_t StratuxPort;
   int8_t WriteToFlash(void)
   { const uint32_t Bytes=sizeof(FlashParameters);
     setCheckSum();
-    FLASH_update(FlashAddr, (uint8_t *)this, Bytes); }
+    return FLASH_update(FlashAddr, (uint8_t *)this, Bytes); }
 #endif
 
 #ifdef WITH_SAMD21

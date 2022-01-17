@@ -101,14 +101,15 @@ static void PrintPOGNS(void)                                   // print paramete
   Parameters.WritePOGNS_Comp(Line);
   Format_String(CONS_UART_Write, Line); }
 
-static void ConsNMEA_Process(void)
-{ if(!ConsNMEA.isPOGNS()) return;
-  if(ConsNMEA.hasCheck() && !ConsNMEA.isChecked() ) return;
-  if(ConsNMEA.Parms==0) { PrintPOGNS(); return; }
-  Parameters.ReadPOGNS(ConsNMEA);
-  PrintParameters();
-  Parameters.WriteToFlash();
-}
+static void ConsNMEA_Process(void)                              // priocess NMEA received on the console
+{ if(!ConsNMEA.isPOGNS()) return;                               // ignore all but $POGNS
+  if(ConsNMEA.hasCheck() && !ConsNMEA.isChecked() ) return;     // if CRC present then it must be correct
+  if(ConsNMEA.Parms==0) { PrintPOGNS(); return; }               // if no parameters given, print the current parameters as $POGNS
+  // printf("ConsNMEA_Process() - before .ReadPOGNS()\n\r" );
+  Parameters.ReadPOGNS(ConsNMEA);                               // read parameter values given in $POGNS
+  // printf("ConsNMEA_Process() - after .ReadPOGNS()\n\r" );
+  PrintParameters();                                            // print the new parameter values
+  Parameters.WriteToFlash(); }                                  // write new parameter set to flash
 
 static void CONS_CtrlC(void)
 { PrintParameters(); }
@@ -120,9 +121,12 @@ static int CONS_Proc(void)
     Count++;
     if(Byte==0x03) CONS_CtrlC();                                // if Ctrl-C received: print parameters
     ConsNMEA.ProcessByte(Byte);
+    // printf("CONS_Proc() Err=%d, Byte=%02X, State/Len=%d/%d\n\r", Err, Byte, ConsNMEA.State, ConsNMEA.Len);
     if(ConsNMEA.isComplete())
     { ConsNMEA_Process();                                           // interpret the ConsNMEA
+      // printf("- after _Process()\n\r" );
       ConsNMEA.Clear(); }
+    // printf("CONS_Proc() - after if()\n\r" );
   }
   return Count; }
 
