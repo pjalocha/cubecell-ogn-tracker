@@ -175,24 +175,24 @@ static void GPS_Random_Update(const GPS_Position &Pos)
   GPS_Random_Update(Pos.Longitude);
   XorShift32(Random.GPS); }
 
-static void OLED_Info(void)
+static void OLED_Info(void)                                               // display the information page
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   uint8_t VertPos=0;
-  Parameters.Print(Line); Line[10]=0;
+  Parameters.Print(Line); Line[10]=0;                                     // display AcftType:AddrType:Address for identification
   Display.drawString(0, VertPos, Line); VertPos+=16;
-  for(uint8_t Idx=0; Idx<Parameters.InfoParmNum; Idx++)
-  { if(Parameters.InfoParmValue(Idx)[0])
-    { uint8_t Len=Format_String(Line, OGN_Packet::InfoParmName(Idx));
+  for(uint8_t Idx=0; Idx<Parameters.InfoParmNum; Idx++)                   // loop over parameters and display those non-empty
+  { if(Parameters.InfoParmValue(Idx)[0])                                  // if parameter not empty
+    { uint8_t Len=Format_String(Line, OGN_Packet::InfoParmName(Idx));     // format parameter name
       Line[Len++]=':'; Line[Len++]=' ';
-      Len+=Format_String(Line+Len, Parameters.InfoParmValue(Idx));
+      Len+=Format_String(Line+Len, Parameters.InfoParmValue(Idx));        // parameter value
       Line[Len]=0;
-      Display.drawString(0, VertPos, Line); VertPos+=16; }
-  }
+      Display.drawString(0, VertPos, Line); VertPos+=16; }                // display the line on the OLED
+    if(VertPos>=64) break; }                                              // give up when out of display vertical range
   Display.display(); }
 
-static void OLED_GPS(const GPS_Position &GPS)          // display time, date and GPS data/status
+static void OLED_GPS(const GPS_Position &GPS)                 // display time, date and GPS data/status
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
   if(GPS.isTimeValid())
@@ -227,7 +227,7 @@ static void OLED_GPS(const GPS_Position &GPS)          // display time, date and
     Len+=Format_UnsDec(Line+Len, RelayQueue.size());
     Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
-    Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts, battery
+    Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
     Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2);
     Line[Len++]= 'V'; Line[Len]=0;
@@ -429,11 +429,11 @@ void setup()
   Parameters.ReadFromFlash();             // read parameters from Flash
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  Serial.setRxBufferSize(128);
+  Serial.setRxBufferSize(120);
   // Serial.setTxBufferSize(128);
   // while (!Serial) { }                  // wait for USB serial port to connect
 
-  Serial.println("OGN Tracker on HELTEC CubeCell");
+  Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
 
   pinMode(USER_KEY, INPUT);               // push button
 
