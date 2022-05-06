@@ -11,7 +11,7 @@ inline uint8_t NMEA_AppendCheckCRNL(char *NMEA, uint8_t Len) { return NMEA_Appen
 
  class NMEA_RxMsg                    // receiver for the NMEA sentences
 { public:
-   static const uint8_t MaxLen=104;  // maximum length
+   static const uint8_t MaxLen=120;  // maximum length
    static const uint8_t MaxParms=24; // maximum number of parameters (commas)
    uint8_t Data[MaxLen];             // the message itself
    uint8_t Len;                      // number of bytes
@@ -97,6 +97,14 @@ inline uint8_t NMEA_AppendCheckCRNL(char *NMEA, uint8_t Len) { return NMEA_Appen
    uint8_t isGP(void) const                     // GPS sentence ?
      { if(Data[1]!='G') return 0;
        return Data[2]=='P'; }
+
+   uint8_t isGL(void) const                     // GLONASS sentence ?
+     { if(Data[1]!='G') return 0;
+       return Data[2]=='L'; }
+
+   uint8_t isGA(void) const                     // GALILEO sentence ?
+     { if(Data[1]!='G') return 0;
+       return Data[2]=='A'; }
 
    uint8_t isGN(void) const
      { if(Data[1]!='G') return 0;
@@ -187,13 +195,25 @@ inline uint8_t NMEA_AppendCheckCRNL(char *NMEA, uint8_t Len) { return NMEA_Appen
        if(Data[4]!='S') return 0;
        return Data[5]=='V'; }
 
-   uint8_t isGNGSV(void) const                   // Combined atellite data
-     { if(!isGN()) return 0;
+   uint8_t isGLGSV(void) const                   // GLONASS satellite data
+     { if(!isGL()) return 0;
        if(Data[3]!='G') return 0;
        if(Data[4]!='S') return 0;
        return Data[5]=='V'; }
 
-   uint8_t isGPTXT(void) const                   // GPS satellite data
+   uint8_t isGAGSV(void) const                   // GALILEO satellite data
+     { if(!isGA()) return 0;
+       if(Data[3]!='G') return 0;
+       if(Data[4]!='S') return 0;
+       return Data[5]=='V'; }
+
+   uint8_t isBDGSV(void) const                   // BEIDOU satellite data
+     { if(!isBD()) return 0;
+       if(Data[3]!='G') return 0;
+       if(Data[4]!='S') return 0;
+       return Data[5]=='V'; }
+
+   uint8_t isGPTXT(void) const                   // GPS test message
      { if(!isGP()) return 0;
        if(Data[3]!='T') return 0;
        if(Data[4]!='X') return 0;

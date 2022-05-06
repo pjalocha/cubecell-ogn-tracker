@@ -138,24 +138,64 @@ static int CONS_Proc(void)
   return Count; }
 
 // ===============================================================================================
-// Process GPS data
+// Process GPS satelite data
 
-static NMEA_RxMsg GpsNMEA;
+// Satellite count and SNR per system, 0=GPS, 1=GLONASS, 2=GALILEO, 3=BEIDO
+static uint16_t SatSNRsum[4]   = { 0, 0, 0, 0 }; // sum up the satellite SNR's
+static uint8_t  SatSNRcount[4] = { 0, 0, 0, 0 }; // sum counter
 
-static int          GPS_Ptr = 0;
-static GPS_Position GPS_Pipe[2];
+static uint16_t   GPS_SatSNR = 0;                // [0.25dB] average SNR from the GSV sentences
+static uint8_t    GPS_SatCnt = 0;                // number of satelites in the above average
+
+static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract satellite data
+{ uint8_t SatSys=0;
+       if(GSV.isGPGSV()) { SatSys=0; }
+  else if(GSV.isGLGSV()) { SatSys=1; }
+  else if(GSV.isGAGSV()) { SatSys=2; }
+  else if(GSV.isBDGSV()) { SatSys=3; }
+  else return;
+  if(GSV.Parms<3) return;
+  int8_t Pkts=Read_Dec1((const char *)GSV.ParmPtr(0)); if(Pkts<0) return;            // how many packets to pass all sats
+  int8_t Pkt =Read_Dec1((const char *)GSV.ParmPtr(1)); if(Pkt <0) return;            // which packet in the sequence
+  int8_t Sats=Read_Dec2((const char *)GSV.ParmPtr(2));                               // total number of satellites
+  if(Sats<0) Sats=Read_Dec1((const char *)GSV.ParmPtr(2));                           // could be a single or double digit number
+  if(Sats<0) return;
+  if(Pkt==1) { SatSNRsum[SatSys]=0; SatSNRcount[SatSys]=0; }                         // if 1st packet then clear the sum and counter
+  for( int Parm=3; Parm<GSV.Parms; )                                                 // up to 4 sats per packet
+  { int8_t PRN =Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(PRN <0) break;      // PRN number
+    int8_t Elev=Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(Elev<0) break;      // [deg] eleveation
+   int16_t Azim=Read_Dec3((const char *)GSV.ParmPtr(Parm++)); if(Azim<0) break;      // [deg] azimuth
+    int8_t SNR =Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(SNR<=0) continue;   // [dB] SNR or absent when not tracked
+    SatSNRsum[SatSys]+=SNR; SatSNRcount[SatSys]++; }                                 // add up SNR
+  if(Pkt==Pkts)                                                                      // if the last packet
+  { uint8_t Count=0; uint16_t Sum=0;
+    for(uint8_t Sys=0; Sys<4; Sys++)
+    { Count+=SatSNRcount[Sys]; Sum+=SatSNRsum[Sys]; }
+    GPS_SatCnt = Count;
+    if(Count) GPS_SatSNR = (4*Sum+Count/2)/Count;
+        else  GPS_SatSNR = 0;
+  }
+}
+
+// ===============================================================================================
+// Process GPS position data
+
+static int          GPS_Ptr = 0;       // 
+static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
 static uint32_t GPS_Latitude;          // [1/60000deg]
 static uint32_t GPS_Longitude;         // [1/60000deg]
 static uint32_t GPS_Altitude;          // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
-static uint8_t  GPS_Satellites = 0;
+static uint8_t  GPS_Satellites = 0;    //
 
 static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
 static uint32_t GPS_PPS_Time = 0;                      // [sec] Unix time which corresponds to the most recent PPS
 
-static uint32_t GPS_Idle=0;
+static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
+
+static NMEA_RxMsg GpsNMEA;                             // NMEA catcher
 
 static int GPS_Process(void)                           // process serial data stream from the GPS
 { int Count=0;
@@ -165,21 +205,22 @@ static int GPS_Process(void)                           // process serial data st
     // GPS.encode(Byte);                                 // process character through the GPS NMEA interpreter
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
-    { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);             // interpret the NMEA by the GPS
+    { if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
+       else GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);       // interpret the position NMEA by the GPS
       GpsNMEA.Clear(); }
     Serial.write(Byte);                                // copy character to the console (we could copy only the selected and correct sentences)
     Count++; }                                         // count processed characters
   return Count; }                                      // return number of processed characters
 
-static void GPS_Next(void)
+static void GPS_Next(void)                             // step to the next GPS position
 { int Next = GPS_Ptr^1;
   if(GPS_Pipe[GPS_Ptr].isValid() && GPS_Pipe[Next].isValid()) GPS_Pipe[GPS_Ptr].calcDifferentials(GPS_Pipe[Next]);
   GPS_Ptr=Next; }
 
-static void GPS_Random_Update(uint8_t Bit)
+static void GPS_Random_Update(uint8_t Bit)             // process single LSB bit from the GPS data
 { Random.GPS = (Random.GPS<<1) | (Bit&1); }
 
-static void GPS_Random_Update(const GPS_Position &Pos)
+static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to produce random number
 { GPS_Random_Update(Pos.Altitude);
   GPS_Random_Update(Pos.Speed);
   GPS_Random_Update(Pos.Latitude);
@@ -229,10 +270,16 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Len+=Format_SignDec(Line+Len, GPS.Altitude/10, 1, 0, 1);
     Line[Len++]='m'; Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    Display.drawString(128, 16, Line);
-    Len=0;
-    Len+=Format_UnsDec(Line+Len, GPS.Satellites);
-    Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; Line[Len]=0;
+    Display.drawString(128, 16, Line); }
+  { uint8_t Len=0;
+    if(GPS.Sec&1)
+    { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, GPS.Satellites);
+                  else  Len+=Format_UnsDec(Line+Len, GPS_SatCnt);
+      Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; }
+    else
+    { Len+=Format_UnsDec(Line+Len, (GPS_SatSNR+2)/4, 2);
+      Line[Len++]='d'; Line[Len++]='B'; }
+    Line[Len]=0;
     Display.drawString(128, 32, Line); }
   { uint8_t Len=0;
     Len+=Format_UnsDec(Line+Len, RelayQueue.size());
@@ -241,7 +288,11 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
     if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
-            else  { Len+=Format_UnsDec(Line+Len,  BattCapacity()   , 3   ); Line[Len++]= '%'; }
+    else
+    { uint8_t Cap = BattCapacity();
+      // if(Cap<100) Line[Len]=' ';                            // not needed because of alignment
+      // if(Cap< 10) Line[Len]=' ';
+      Len+=Format_UnsDec(Line+Len, Cap); Line[Len++]= '%'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
@@ -285,6 +336,23 @@ static int getInfoPacket(OGN1_Packet &Packet)                          // produc
   Packet.Header.NonPos = 1;
   Packet.calcAddrParity();
   return ReadInfo(Packet); }                                           // encode the info from the parameters
+
+static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
+{ Packet.HeaderWord = 0;
+  Packet.Header.Address = Parameters.Address;                          // aircraft address
+  Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
+  Packet.Header.NonPos = 1;
+  Packet.calcAddrParity();
+  Packet.Status.Hardware=HARDWARE_ID;
+  Packet.Status.Firmware=SOFTWARE_ID;
+  GPS.EncodeStatus(Packet);
+  uint8_t SatSNR = (GPS_SatSNR+2)/4;                     // encode number of satellites and SNR in the Status packet
+  if(SatSNR>8) { SatSNR-=8; if(SatSNR>31) SatSNR=31; }
+          else { SatSNR=0; }
+  Packet.Status.SatSNR = SatSNR;
+  Packet.clrTemperature();
+  Packet.EncodeVoltage(((BattVoltage>>2)+500)/1000);            // [1/64V]
+  return 1; }
 
 static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
 { Packet.HeaderWord = 0;
