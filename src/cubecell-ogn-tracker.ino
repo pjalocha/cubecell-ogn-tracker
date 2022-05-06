@@ -42,9 +42,9 @@ static FlashParameters Parameters;       // parameters stored in Flash: address,
 static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every second
 
 static uint8_t BattCapacity(uint16_t mVolt)
-{ if(mVolt>=4100) return 100;                                 // 4.1V or above => full capacity
-  if(mVolt<=3600) return   0;                                 // 3.6V or below => zero capacity
-  return (mVolt-3600+2)/5; }                                  // linear dependence (simplified)
+{ if(mVolt>=4050) return 100;                                 // 4.05V or above => full capacity
+  if(mVolt<=3550) return   0;                                 // 3.55V or below => zero capacity
+  return (mVolt-3550+2)/5; }                                  // linear dependence (simplified)
 
 static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
@@ -519,7 +519,7 @@ void setup()
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
-  Pixels.setBrightness(0x08);
+  Pixels.setBrightness(0x20);
   LED_Green();
   // Pixels.setPixelColor( 0, 255, 0, 0, 0); // Green
   // Pixels.show();
