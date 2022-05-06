@@ -23,7 +23,7 @@
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
-#define WITH_OGN1                          // OGN protocol version 1/2
+#define WITH_OGN1                          // OGN protocol version 1
 #define OGN_Packet OGN1_Packet
 
 #define HARDWARE_ID 0x03
@@ -40,6 +40,13 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 static FlashParameters Parameters;       // parameters stored in Flash: address, aircraft type, etc.
 
 static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every second
+
+static uint8_t BattCapacity(uint16_t mVolt)
+{ if(mVolt>=4100) return 100;                                 // 4.1V or above => full capacity
+  if(mVolt<=3600) return   0;                                 // 3.6V or below => zero capacity
+  return (mVolt-3600+2)/5; }                                  // linear dependence (simplified)
+
+static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
 static Air530ZClass GPS;                 // GPS
 
@@ -233,8 +240,9 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
-    Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2);
-    Line[Len++]= 'V'; Line[Len]=0;
+    if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
+            else  { Len+=Format_UnsDec(Line+Len,  BattCapacity()   , 3   ); Line[Len++]= '%'; }
+    Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
   Display.display(); }
