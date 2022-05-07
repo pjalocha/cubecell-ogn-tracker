@@ -354,12 +354,19 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.Hardware=HARDWARE_ID;
   Packet.Status.Firmware=SOFTWARE_ID;
   GPS.EncodeStatus(Packet);
-  uint8_t SatSNR = (GPS_SatSNR+2)/4;                     // encode number of satellites and SNR in the Status packet
+  uint8_t SatSNR = (GPS_SatSNR+2)/4;                            // encode number of satellites and SNR in the Status packet
   if(SatSNR>8) { SatSNR-=8; if(SatSNR>31) SatSNR=31; }
           else { SatSNR=0; }
   Packet.Status.SatSNR = SatSNR;
   Packet.clrTemperature();
-  Packet.EncodeVoltage(((BattVoltage>>2)+500)/1000);            // [1/64V]
+  Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);              // [1/64V]
+  Packet.Status.RadioNoise = 0;                                 // we need yet to measure it
+  uint16_t RxRate = RX_OGN_Count64+1;
+  uint8_t RxRateLog2=0; RxRate>>=1; while(RxRate) { RxRate>>=1; RxRateLog2++; }
+  Packet.Status.RxRate = RxRateLog2;
+  uint8_t TxPower = Parameters.TxPower-4;
+  if(TxPower>15) TxPower=15;
+  Packet.Status.TxPower = TxPower;
   return 1; }
 
 static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
@@ -612,12 +619,20 @@ void loop()
       TxPkt0=TxPkt1=0;
       if(GPS.isValid()) TxPkt0 = TxPkt1 = &TxPosPacket;
       static uint8_t InfoTxBackOff=0;
+      static uint8_t InfoToggle=0;
       if(InfoTxBackOff) InfoTxBackOff--;
-      else if(getInfoPacket(TxInfoPacket.Packet))                      // prepare next information packet
-      { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
-        if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
-                      else TxPkt0 = &TxInfoPacket;
-        InfoTxBackOff = 15 + (Random.RX%3); }
+      else
+      { InfoToggle = !InfoToggle;
+        int Ret=0;
+        if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);
+        if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);
+        if(Ret>0)
+        { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
+          if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
+                        else TxPkt0 = &TxInfoPacket;
+          InfoTxBackOff = 15 + (Random.RX%3);
+        }
+      }
       static uint8_t RelayTxBackOff=0;
       if(RelayTxBackOff) RelayTxBackOff--;
       else if(GetRelayPacket(&TxRelPacket))
