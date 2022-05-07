@@ -12,6 +12,7 @@
 #include "HT_SSD1306Wire.h"
 #include "CubeCell_NeoPixel.h"
 
+#include "fifo.h"
 #include "format.h"
 #include "nmea.h"
 #include "manchester.h"
@@ -65,6 +66,9 @@ static void VextOFF(void)                  // Vext default OFF
   digitalWrite(Vext, HIGH); }
 
 static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
+
+static Delay<uint8_t, 64> RX_OGN_CountDelay;
+static uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
 
 // ===============================================================================================
 
@@ -141,7 +145,7 @@ static int CONS_Proc(void)
 // Process GPS satelite data
 
 // Satellite count and SNR per system, 0=GPS, 1=GLONASS, 2=GALILEO, 3=BEIDO
-static uint16_t SatSNRsum[4]   = { 0, 0, 0, 0 }; // sum up the satellite SNR's
+static uint16_t SatSNRsum  [4] = { 0, 0, 0, 0 }; // sum up the satellite SNR's
 static uint8_t  SatSNRcount[4] = { 0, 0, 0, 0 }; // sum counter
 
 static uint16_t   GPS_SatSNR = 0;                // [0.25dB] average SNR from the GSV sentences
@@ -282,8 +286,12 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Line[Len]=0;
     Display.drawString(128, 32, Line); }
   { uint8_t Len=0;
-    Len+=Format_UnsDec(Line+Len, RelayQueue.size());
-    Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
+    // Len+=Format_UnsDec(Line+Len, RelayQueue.size());
+    // Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
+    Len+=Format_String(Line+Len, "Rx ");
+    Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+    Len+=Format_String(Line+Len, "/min");
+    Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
@@ -369,9 +377,9 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produc
 // OGNv1 SYNC:       0x0AF3656C encoded in Manchester
 static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A, 0x00, 0x00 };
 // OGNv2 SYNC:       0xF56D3738 encoded in Machester
-static const uint8_t OGN2_SYNC[10] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A, 0x00, 0x00 };
+// static const uint8_t OGN2_SYNC[10] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A, 0x00, 0x00 };
 
-static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
+// static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
 
 static RadioEvents_t Radio_Events;
 
@@ -384,6 +392,9 @@ static void Radio_TxDone(void)
 static void Radio_TxTimeout(void)
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   Radio.Rx(0); }
+
+static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
+// static LowPass2<uint32_t, 4,2,4> RX_RSSI;   // low pass filter to average the RX noise
 
 static LDPC_Decoder      Decoder;      // decoder and error corrector for the OGN Gallager/LDPC code
 static RFM_FSK_RxPktData RxPktData;
@@ -407,6 +418,7 @@ static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a p
 
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR)
 { if(Size!=2*26) return;
+  RX_OGN_Packets++;
   LED_Green();
   uint8_t PktIdx=0;
   for(uint8_t Idx=0; Idx<26; Idx++)                                     // loop over packet bytes
@@ -415,8 +427,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
     uint8_t ByteL = Packet[PktIdx++];
     ByteL = ManchesterDecode[ByteL]; uint8_t ErrL=ByteL>>4; ByteL&=0x0F;
     RxPktData.Data[Idx]=(ByteH<<4) | ByteL;
-    RxPktData.Err [Idx]=(ErrH <<4) | ErrL ;
-  }
+    RxPktData.Err [Idx]=(ErrH <<4) | ErrL ; }
   RxPktData.Time = GPS_PPS_Time;                                         // [sec]
   RxPktData.msTime = millis()-GPS_PPS_ms;                                // [ms] time since PPS
   RxPktData.Channel = 0;
@@ -448,8 +459,8 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
 static void OGN_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
 
-static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
+// static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
+// { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
 
 static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
@@ -571,8 +582,10 @@ void loop()
       GPS_Satellites = GPS.Satellites;
       if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_Time = GPS.getUnixTime(); }    // if time and date are valid
                                            else  { LED_Yellow(); }
+      RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
+      RX_OGN_Packets=0;                                                           // clear the received packet count
       CleanRelayQueue(GPS_PPS_Time);
-      if(GPS.isValid())                                           // if position nis valid
+      if(GPS.isValid())                                           // if position is valid
       { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
         GPS_Latitude  = GPS.Latitude;
         GPS_Longitude = GPS.Longitude;
