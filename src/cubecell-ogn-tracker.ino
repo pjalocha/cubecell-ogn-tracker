@@ -13,6 +13,8 @@
 #include "CubeCell_NeoPixel.h"
 
 #include "fifo.h"
+#include "lowpass2.h"
+
 #include "format.h"
 #include "nmea.h"
 #include "manchester.h"
@@ -67,8 +69,10 @@ static void VextOFF(void)                  // Vext default OFF
 
 static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
 
-static Delay<uint8_t, 64> RX_OGN_CountDelay;
+static Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
 static uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
+
+static LowPass2<int32_t, 4,2,4> RX_RSSI;       // low pass filter to average the RX noise
 
 // ===============================================================================================
 
@@ -360,7 +364,7 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.SatSNR = SatSNR;
   Packet.clrTemperature();
   Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);              // [1/64V]
-  Packet.Status.RadioNoise = 0;                                 // we need yet to measure it
+  Packet.Status.RadioNoise = -RX_RSSI.getOutput();              // [-0.5dBm]
   uint16_t RxRate = RX_OGN_Count64+1;
   uint8_t RxRateLog2=0; RxRate>>=1; while(RxRate) { RxRate>>=1; RxRateLog2++; }
   Packet.Status.RxRate = RxRateLog2;
@@ -401,7 +405,6 @@ static void Radio_TxTimeout(void)
   Radio.Rx(0); }
 
 static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
-// static LowPass2<uint32_t, 4,2,4> RX_RSSI;   // low pass filter to average the RX noise
 
 static LDPC_Decoder      Decoder;      // decoder and error corrector for the OGN Gallager/LDPC code
 static RFM_FSK_RxPktData RxPktData;
@@ -544,9 +547,9 @@ void setup()
 
   Display.init();                         // Start the OLED
   OLED_Info();
-  GPS.begin(38400);                                  // Start the GPS
+  GPS.begin(57600);                                  // Start the GPS
 
-  Radio_FreqPlan.setPlan(Parameters.FreqPlan);          // set the frequency plan from the parameters	
+  Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
 
   Radio_Events.TxDone    = Radio_TxDone;             // Start the Radio
   Radio_Events.TxTimeout = Radio_TxTimeout;
@@ -557,7 +560,7 @@ void setup()
   OGN_RxConfig();
   Radio.Rx(0);
 
-}
+  RX_RSSI.Set(2*110); }
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
@@ -568,14 +571,78 @@ static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
 static uint32_t TxTime0, TxTime1;
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
 
+static int32_t  RxRssiSum=0;                // sum RSSI readouts
+static int      RxRssiCount=0;              // count RSSI readouts
+
+static void StartRFslot(void)                                     // start the TX/RX time slot right after the GPS stops sending data
+{ if(RxRssiCount) { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
+
+  xorshift64(Random.Word);
+  GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
+  GPS_Satellites = GPS.Satellites;
+  if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_Time = GPS.getUnixTime(); }    // if time and date are valid
+                                       else  { LED_Yellow(); }
+  RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
+  RX_OGN_Packets=0;                                                           // clear the received packet count
+  CleanRelayQueue(GPS_PPS_Time);
+  if(GPS.isValid())                                           // if position is valid
+  { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
+    GPS_Latitude  = GPS.Latitude;
+    GPS_Longitude = GPS.Longitude;
+    GPS_GeoidSepar= GPS.GeoidSeparation;
+    GPS_LatCosine = GPS.LatitudeCosine;
+    Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude); // set Radio frequency plan
+    GPS_Random_Update(GPS);
+    getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
+    TxPosPacket.Packet.Whiten();
+    TxPosPacket.calcFEC();                                    // position packet is ready for transmission
+  }
+  CONS_Proc();
+  BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
+  CONS_Proc();
+  OLED_GPS(GPS);                                              // display GPS data on the OLED
+  CONS_Proc();
+  RF_Slot=0;
+  Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
+  OGN_TxConfig();
+  OGN_RxConfig();
+  Radio.Rx(0);
+  TxTime0 = Random.RX  % 399; TxTime0 += 400;
+  TxTime1 = Random.GPS % 399; TxTime1 += 800;
+  TxPkt0=TxPkt1=0;
+  if(GPS.isValid()) TxPkt0 = TxPkt1 = &TxPosPacket;
+  static uint8_t InfoTxBackOff=0;
+  static uint8_t InfoToggle=0;
+  if(InfoTxBackOff) InfoTxBackOff--;
+  else
+  { InfoToggle = !InfoToggle;
+    int Ret=0;
+    if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);
+    if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);
+    if(Ret>0)
+    { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
+      if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
+                    else TxPkt0 = &TxInfoPacket;
+      InfoTxBackOff = 15 + (Random.RX%3);
+    }
+  }
+  static uint8_t RelayTxBackOff=0;
+  if(RelayTxBackOff) RelayTxBackOff--;
+  else if(GetRelayPacket(&TxRelPacket))
+  { if(Random.RX&0x20) TxPkt1 = &TxRelPacket;
+                  else TxPkt0 = &TxRelPacket;
+    RelayTxBackOff = Random.RX%3; }
+  LED_OFF();
+  GPS_Next(); }
+
 void loop()
 {
   Button_Process();
   if(Button_LowPower) { Sleep(); return; }
 
-  CONS_Proc();
-  if(GPS_Process()==0) { GPS_Idle++; delay(1); }
-                  else { GPS_Idle=0; }
+  CONS_Proc();                                                    // process input from the console
+  if(GPS_Process()==0) { GPS_Idle++; delay(1); }                  // process input from the GPS
+                  else { GPS_Idle=0; RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++; } // [0.5dBm]
   if(GPS_Done)                                                    // if state is GPS not sending data
   { if(GPS_Idle<3)                                                // GPS (re)started sending data
     { GPS_Done=0;                                                 // change the state to GPS is sending data
@@ -583,64 +650,8 @@ void loop()
       GPS_PPS_Time++; }
   }
   else
-  { if(GPS_Idle>5)                                                // GPS stopped sending data
-    { xorshift64(Random.Word);
-      GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
-      GPS_Satellites = GPS.Satellites;
-      if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_Time = GPS.getUnixTime(); }    // if time and date are valid
-                                           else  { LED_Yellow(); }
-      RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
-      RX_OGN_Packets=0;                                                           // clear the received packet count
-      CleanRelayQueue(GPS_PPS_Time);
-      if(GPS.isValid())                                           // if position is valid
-      { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
-        GPS_Latitude  = GPS.Latitude;
-        GPS_Longitude = GPS.Longitude;
-        GPS_GeoidSepar= GPS.GeoidSeparation;
-        GPS_LatCosine = GPS.LatitudeCosine;
-        Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude); // set Radio frequency plan
-        GPS_Random_Update(GPS);
-        getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
-        TxPosPacket.Packet.Whiten();
-        TxPosPacket.calcFEC();                                    // position packet is ready for transmission
-      }
-      CONS_Proc();
-      BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
-      CONS_Proc();
-      OLED_GPS(GPS);                                              // display GPS data on the OLED
-      CONS_Proc();
-      RF_Slot=0;
-      Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
-      OGN_TxConfig();
-      OGN_RxConfig();
-      Radio.Rx(0);
-      TxTime0 = Random.RX  % 399; TxTime0 += 400;
-      TxTime1 = Random.GPS % 399; TxTime1 += 800;
-      TxPkt0=TxPkt1=0;
-      if(GPS.isValid()) TxPkt0 = TxPkt1 = &TxPosPacket;
-      static uint8_t InfoTxBackOff=0;
-      static uint8_t InfoToggle=0;
-      if(InfoTxBackOff) InfoTxBackOff--;
-      else
-      { InfoToggle = !InfoToggle;
-        int Ret=0;
-        if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);
-        if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);
-        if(Ret>0)
-        { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
-          if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
-                        else TxPkt0 = &TxInfoPacket;
-          InfoTxBackOff = 15 + (Random.RX%3);
-        }
-      }
-      static uint8_t RelayTxBackOff=0;
-      if(RelayTxBackOff) RelayTxBackOff--;
-      else if(GetRelayPacket(&TxRelPacket))
-      { if(Random.RX&0x20) TxPkt1 = &TxRelPacket;
-                      else TxPkt0 = &TxRelPacket;
-        RelayTxBackOff = Random.RX%3; }
-      LED_OFF();
-      GPS_Next();
+  { if(GPS_Idle>5)                                               // GPS stopped sending data
+    { StartRFslot();                                             // start the RF slot
       GPS_Done=1;
     }
   }
