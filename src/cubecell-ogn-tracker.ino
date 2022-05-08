@@ -288,13 +288,18 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     { Len+=Format_UnsDec(Line+Len, (GPS_SatSNR+2)/4, 2);
       Line[Len++]='d'; Line[Len++]='B'; }
     Line[Len]=0;
+    Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 32, Line); }
   { uint8_t Len=0;
     // Len+=Format_UnsDec(Line+Len, RelayQueue.size());
     // Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
-    Len+=Format_String(Line+Len, "Rx ");
-    Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
-    Len+=Format_String(Line+Len, "/min");
+    // Len+=Format_String(Line+Len, "Rx ");
+    if(GPS.Sec&1)
+    { Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+      Len+=Format_String(Line+Len, "/min"); }
+    else
+    { Len+=Format_SignDec(Line+Len, RX_RSSI.getOutput()*5, 2, 1);
+      Len+=Format_String(Line+Len, "dBm"); }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
@@ -560,7 +565,7 @@ void setup()
   OGN_RxConfig();
   Radio.Rx(0);
 
-  RX_RSSI.Set(2*110); }
+  RX_RSSI.Set(-2*110); }
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
