@@ -178,7 +178,8 @@ static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract sat
   if(Pkt==Pkts)                                                                      // if the last packet
   { uint8_t Count=0; uint16_t Sum=0;
     for(uint8_t Sys=0; Sys<4; Sys++)
-    { Count+=SatSNRcount[Sys]; Sum+=SatSNRsum[Sys]; }
+    { if(SatSNRcount[Sys]==0) continue;
+      Count+=SatSNRcount[Sys]; Sum+=SatSNRsum[Sys]; }
     GPS_SatCnt = Count;
     if(Count) GPS_SatSNR = (4*Sum+Count/2)/Count;
         else  GPS_SatSNR = 0;
@@ -234,6 +235,8 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   GPS_Random_Update(Pos.Latitude);
   GPS_Random_Update(Pos.Longitude);
   XorShift32(Random.GPS); }
+
+// ===============================================================================================
 
 static void OLED_Info(void)                                               // display the information page
 { Display.clear();
@@ -314,6 +317,15 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
   Display.display(); }
+
+static int OLED_CurrPage = 0;
+
+static void OLED_NextPage(void)
+{ OLED_CurrPage = !OLED_CurrPage; }
+
+static void OLED_DispPage(const GPS_Position &GPS)
+{ if(OLED_CurrPage) OLED_Info(); 
+               else OLED_GPS(GPS); }
 
 // ===============================================================================================
 // RGB-LED
@@ -508,19 +520,20 @@ static void Sleep(void)
 
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; }
 
-static uint32_t Button_PrevSysTime=0;
-static uint32_t Button_PressTime=0;
+static uint32_t Button_PrevSysTime=0;               // previous sys-time when the Button_Process() was called
+static uint32_t Button_PressTime=0;                 // count the time the button is pressed
 static bool Button_LowPower=0;
 
 static void Button_Process(void)
-{ uint32_t SysTime = millis();
-  if(!Button_isPressed())
-  { Button_PressTime=0;
-    Button_LowPower=0; }
-  else
-  { uint32_t Diff = SysTime-Button_PrevSysTime;
-    Button_PressTime += Diff;
-    if(Button_PressTime>=1000) Button_LowPower=1;
+{ uint32_t SysTime = millis();                      // [ms]
+  uint32_t Diff = SysTime-Button_PrevSysTime;       // [ms] since previous call
+  if(!Button_isPressed())                           // if button not pressed (any more)
+  { if(Button_PressTime>=100) OLED_NextPage();      // switch to the next OLED page
+    Button_PressTime=0;                             // clear the press-time counter
+    Button_LowPower=0; }                            // reset counter to enter sleep
+  else                                              // when button is pressed
+  { Button_PressTime += Diff;                       // accumulate the press-time
+    if(Button_PressTime>=1000) Button_LowPower=1;   // if more than one second then declare low-power request
   }
   Button_PrevSysTime=SysTime; }
 
@@ -605,7 +618,7 @@ static void StartRFslot(void)                                     // start the T
   CONS_Proc();
   BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
   CONS_Proc();
-  OLED_GPS(GPS);                                              // display GPS data on the OLED
+  OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   RF_Slot=0;
   Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
