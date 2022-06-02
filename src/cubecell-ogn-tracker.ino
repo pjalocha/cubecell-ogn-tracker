@@ -396,6 +396,7 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produc
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
   Packet.calcAddrParity();
   Packet.Position.AcftType = Parameters.AcftType;                      // aircraft type
+  Packet.Position.Stealth  = Parameters.Stealth;
   GPS.Encode(Packet);
   return 1; }
 
