@@ -67,6 +67,8 @@ static void VextOFF(void)                  // Vext default OFF
 { pinMode(Vext,OUTPUT);
   digitalWrite(Vext, HIGH); }
 
+static FreqPlan Radio_FreqPlan;       // RF hopping pattern
+
 static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
 
 static Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
@@ -294,9 +296,7 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 32, Line); }
   { uint8_t Len=0;
-    // Len+=Format_UnsDec(Line+Len, RelayQueue.size());
-    // Len+=Format_String(Line+Len, " Acft"); Line[Len]=0;
-    // Len+=Format_String(Line+Len, "Rx ");
+/*
     if(GPS.Sec&1)
     { Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
       Len+=Format_String(Line+Len, "/min"); }
@@ -307,25 +307,71 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
+*/
     if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
     else
     { uint8_t Cap = BattCapacity();
-      // if(Cap<100) Line[Len]=' ';                            // not needed because of alignment
-      // if(Cap< 10) Line[Len]=' ';
       Len+=Format_UnsDec(Line+Len, Cap); Line[Len++]= '%'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
   Display.display(); }
 
+static void OLED_RF(void)                 // display RF-related data
+{ Display.clear();
+  Display.setFont(ArialMT_Plain_16);
+
+  uint8_t Len=Format_String(Line, "SX1262: ");
+  Len+=Format_SignDec(Line+Len, (int16_t)Parameters.TxPower);              // Tx power
+  Len+=Format_String(Line+Len, "dBm");
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 0, Line);
+
+  Len=0; // Len=Format_String(Line, "Rx: ");
+  Len+=Format_SignDec(Line+Len, RX_RSSI.getOutput()*5, 2, 1);
+  Len+=Format_String(Line+Len, "dBm");
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  Display.drawString(128, 16, Line);
+
+  Len=0;
+  Len+=Format_UnsDec(Line+Len, RelayQueue.size());
+  Len+=Format_String(Line+Len, " Acft");
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 32, Line);
+
+  Len=0;
+  Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+  Len+=Format_String(Line+Len, "/min");
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  Display.drawString(128, 32, Line);
+
+  Len=0;
+  Len+=Format_String(Line+Len, Radio_FreqPlan.getPlanName());                 // name of the frequency plan
+  Line[Len++]=' ';
+  Len+=Format_UnsDec(Line+Len, (uint16_t)(Radio_FreqPlan.getCenterFreq()/100000), 3, 1); // center frequency
+  Len+=Format_String(Line+Len, "MHz");
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 48, Line);
+
+  Display.display(); }
+
 static int OLED_CurrPage = 0;
 
 static void OLED_NextPage(void)
-{ OLED_CurrPage = !OLED_CurrPage; }
+{ OLED_CurrPage++;
+  if(OLED_CurrPage>=3) OLED_CurrPage=0; }
 
 static void OLED_DispPage(const GPS_Position &GPS)
-{ if(OLED_CurrPage) OLED_Info(); 
-               else OLED_GPS(GPS); }
+{ switch(OLED_CurrPage)
+  { case 2: OLED_Info(); break; 
+    case 1: OLED_RF(); break;
+    default: OLED_GPS(GPS); }
+}
 
 // ===============================================================================================
 // RGB-LED
@@ -411,8 +457,6 @@ static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96,
 // static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
 
 static RadioEvents_t Radio_Events;
-
-static FreqPlan Radio_FreqPlan;       // RF hopping pattern
 
 static void Radio_TxDone(void)
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
