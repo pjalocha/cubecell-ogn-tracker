@@ -557,11 +557,14 @@ static void Sleep(void)
 { GPS.end();
   Radio.Sleep();
   Display.stop();
-  detachInterrupt(RADIO_DIO_1);
   LED_OFF(); // turnOffRGB();
+  Wire.end();
+  Serial.end();
+  detachInterrupt(RADIO_DIO_1);
   pinMode(Vext, ANALOG);
   pinMode(ADC, ANALOG);
-  lowPowerHandler(); }
+  while(1) lowPowerHandler();
+}
 
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; }
 
