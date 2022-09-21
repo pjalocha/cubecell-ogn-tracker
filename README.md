@@ -2,9 +2,31 @@
 OGN-Tracker implementation on the HELTEC CubeCell 6502 with GPS
 
 ## Functionality
-As of now the OGN transmission and relaying are implemented however not really well tested thus approach with caution.
+As of now the OGN transmission and relaying are implemented and working well.
+As well status and info messages are sent like other OGN-Trackers.
 Serial console prints GPS NMEA and setting parameters is possible via $POGNS sentence,
 however there is an issue with characters being lost thus this needs to be addressed.
+
+## Parameters, which can be set
+You can set the parameters with any terminal program which is able to send characters to the serial port emulated on the USB.
+Ctrl-C lists all parameters and theie current values.
+You can change a parameter value with sending:
+```
+$POGNS,<name>=<value>
+```
+Each time you change a parameter with $POGNS the full parameter set is written into flash thus permanently stored.
+
+
+**Aircraft-type:** drone-type is 13 or 0xD
+```
+$POGNS,AcftType=13
+```
+
+**Transmitted power:** [dBm]
+```
+$POGNS,TxPower=14
+```
+
 
 ## Compile/upload
 This project is compiled with PlatformIO and requires a forked HELTEC library
