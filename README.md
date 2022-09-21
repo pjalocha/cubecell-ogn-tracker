@@ -29,10 +29,11 @@ $POGNS,TxPower=14
 
 **Info-parameters:** like registration, pilot name, aircraft type, model, manufacturer, other identification
 Each parameter is a string up to 15 ASCII characters which are non-blank and within 7-bit range.
-The names are: "Pilot", "Manuf", "Model", "Type", "SN", "Reg", "ID", "Class", "Task", "Base", "ICE", "PilotID", "Hard", Soft", "Crew"
+The legal names are: **Pilot, Manuf, Model, "Type", SN, Reg, ID, Class, Task, Base, ICE, PilotID, Hard, Soft, Crew**
 ```
-$POGNS,Reg=XY-ABC
+$POGNS,Reg=XY-ABC,Pilot=John
 ```
+The info-parameters are transmitted at slow pace and are visible in the APRS data stream.
 
 ## Compile/upload
 This project is compiled with PlatformIO and requires a forked HELTEC library
