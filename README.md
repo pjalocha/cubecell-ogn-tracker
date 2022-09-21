@@ -27,6 +27,12 @@ $POGNS,AcftType=13
 $POGNS,TxPower=14
 ```
 
+**Info-parameters:** like registration, pilot name, aircraft type, model, manufacturer, other identification
+Each parameter is a string up to 15 ASCII characters which are non-blank and within 7-bit range.
+The names are: "Pilot", "Manuf", "Model", "Type", "SN", "Reg", "ID", "Class", "Task", "Base", "ICE", "PilotID", "Hard", Soft", "Crew"
+```
+$POGNS,Reg=XY-ABC
+```
 
 ## Compile/upload
 This project is compiled with PlatformIO and requires a forked HELTEC library
