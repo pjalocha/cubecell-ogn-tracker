@@ -40,6 +40,9 @@ $POGNS,Reg=XY-ABC,Pilot=John
 ```
 The info-parameters are transmitted at slow pace and are visible in the APRS data stream.
 
+## Firmware
+In the **firmware** subdirectory of the project you can find precompiled firmware files which can be flashed to the device.
+
 ## Compile/upload
 This project is compiled with PlatformIO and requires a forked HELTEC library
 modified to enable OGN transmission and reception https://github.com/pjalocha/CubeCell-Arduino
