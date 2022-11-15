@@ -5,6 +5,7 @@
 #include <Wire.h>
 
 #include "LoRaWan_APP.h"
+#include "sx126x.h"
 
 #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
@@ -32,6 +33,9 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define HARDWARE_ID 0x03
 #define SOFTWARE_ID 0x01
 
+#define HARD_NAME "CC-OGN"
+#define SOFT_NAME "2022.11.15"
+
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
 #define DEFAULT_CONbaud    115200         // [bps]
@@ -51,11 +55,15 @@ static uint8_t BattCapacity(uint16_t mVolt)
 
 static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
+// ===============================================================================================
+
 static Air530ZClass GPS;                 // GPS
 
 static SSD1306Wire Display(0x3c, 500000, SDA, SCL, GEOMETRY_128_64, GPIO10 ); // OLED: addr , freq , i2c group , resolution , rst
 
 static CubeCell_NeoPixel Pixels(1, RGB, NEO_GRB + NEO_KHZ800);                // three-color LED
+
+// ===============================================================================================
 
 static char Line[256];                                                        // for OLED abd console printing
 
@@ -69,7 +77,8 @@ static void VextOFF(void)                  // Vext default OFF
 
 static FreqPlan Radio_FreqPlan;       // RF hopping pattern
 
-static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;       // received packets and candidates to be relayed
+static FIFO<RFM_FSK_RxPktData, 16> RxFIFO;         // buffer for received packets
+static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;  // candidate packets to be relayed
 
 static Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
 static uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
@@ -239,6 +248,32 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   XorShift32(Random.GPS); }
 
 // ===============================================================================================
+
+static void OLED_Logo(void)                                               // display the logo page
+{ Display.clear();
+
+  Display.drawCircleQuads(96, 32, 30, 0b1111);
+  Display.drawCircleQuads(96, 32, 34, 0b0001);
+  Display.drawCircleQuads(96, 32, 38, 0b0001);
+
+  Display.setFont(ArialMT_Plain_16);
+  Display.setTextAlignment(TEXT_ALIGN_CENTER);
+  // u8g2_SetFont(OLED, u8g2_font_ncenB14_tr);
+  Display.drawString(96, 14, "OGN");
+  // u8g2_SetFont(OLED, u8g2_font_8x13_tr);
+  Display.drawString(96, 26, "Tracker");
+
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString( 0,  0, "CC-OGN");
+  // Display.drawString( 0, 38, "");
+
+  Display.setFont(ArialMT_Plain_10);
+  Parameters.Print(Line); Line[10]=0;
+  Display.drawString( 0, 16, Line);
+#ifdef SOFT_NAME
+  Display.drawString( 0, 54, SOFT_NAME);
+#endif
+  Display.display(); }
 
 static void OLED_Info(void)                                               // display the information page
 { Display.clear();
@@ -456,6 +491,9 @@ static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96,
 
 // static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
 
+static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
+static uint8_t RF_Channel = 0; // hopping channel
+
 static RadioEvents_t Radio_Events;
 
 static void Radio_TxDone(void)
@@ -488,29 +526,40 @@ static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a p
   RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
-static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR)
+// a new packet has been received callback - this should probably be a quick call
+static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
 { if(Size!=2*26) return;
   RX_OGN_Packets++;
-  LED_Green();
+  LED_Green();                                                         // green flash
+  PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
+  SX126xGetPacketStatus(&RadioPktStatus);
+  RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;
+  RFM_FSK_RxPktData *RxPkt = RxFIFO.getWrite();                        // new packet in the RxFIFO
+  RxPkt->Time = GPS_PPS_Time;                                          // [sec]
+  RxPkt->msTime = millis()-GPS_PPS_ms;                                 // [ms] time since PPS
+  RxPkt->Channel = 0x80 | RF_Channel;                                  // system:channel
+  RxPkt->RSSI = -2*RSSI;                                               // [-0.5dBm]
   uint8_t PktIdx=0;
-  for(uint8_t Idx=0; Idx<26; Idx++)                                     // loop over packet bytes
+  for(uint8_t Idx=0; Idx<26; Idx++)                                    // loop over packet bytes
   { uint8_t ByteH = Packet[PktIdx++];
     ByteH = ManchesterDecode[ByteH]; uint8_t ErrH=ByteH>>4; ByteH&=0x0F; // decode manchester, detect (some) errors
     uint8_t ByteL = Packet[PktIdx++];
     ByteL = ManchesterDecode[ByteL]; uint8_t ErrL=ByteL>>4; ByteL&=0x0F;
-    RxPktData.Data[Idx]=(ByteH<<4) | ByteL;
-    RxPktData.Err [Idx]=(ErrH <<4) | ErrL ; }
-  RxPktData.Time = GPS_PPS_Time;                                         // [sec]
-  RxPktData.msTime = millis()-GPS_PPS_ms;                                // [ms] time since PPS
-  RxPktData.Channel = 0;
-  RxPktData.RSSI = -2*RSSI;
-  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift32(Random.RX);
-  uint8_t RxPacketIdx  = RelayQueue.getNew();                   // get place for this new packet
+    RxPkt->Data[Idx]=(ByteH<<4) | ByteL;
+    RxPkt->Err [Idx]=(ErrH <<4) | ErrL ; }
+  RxFIFO.Write();                                                      // put packet into the RxFIFO
+  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift32(Random.RX);       // update random number
+  LED_OFF(); }
+
+static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
+{ RFM_FSK_RxPktData *RxPkt = RxFIFO.getRead();                         // check for new received packets
+  if(RxPkt==0) return;
+  uint8_t RxPacketIdx  = RelayQueue.getNew();                          // get place for this new packet
   OGN_RxPacket<OGN1_Packet> *RxPacket = RelayQueue[RxPacketIdx];
-  uint8_t DecErr = RxPktData.Decode(*RxPacket, Decoder);        // LDPC FEC decoder
+  uint8_t DecErr = RxPkt->Decode(*RxPacket, Decoder);                  // LDPC FEC decoder
   // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
   //         millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
-  if(DecErr || RxPacket->RxErr>=10 ) { LED_OFF(); return; }       // if FEC not correctly decoded or too many bit errors then give up
+  if(DecErr || RxPacket->RxErr>=10 ) return;                           // if FEC not correctly decoded or too many bit errors then give up
   uint8_t OwnPacket = ( RxPacket->Packet.Header.Address  == Parameters.Address  )       // is it my own packet (through a relay) ?
                    && ( RxPacket->Packet.Header.AddrType == Parameters.AddrType );
   if(OwnPacket || RxPacket->Packet.Header.NonPos || RxPacket->Packet.Header.Encrypted) { LED_OFF(); return; }
@@ -519,23 +568,34 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   { int32_t LatDist=0, LonDist=0;
     bool DistOK = RxPacket->Packet.calcDistanceVector(LatDist, LonDist, GPS_Latitude, GPS_Longitude, GPS_LatCosine)>=0;
     if(DistOK)
-    { RxPacket->calcRelayRank(GPS_Altitude/10);                                         // calculate the relay-rank (priority for relay)
+    { RxPacket->calcRelayRank(GPS_Altitude/10);                        // calculate the relay-rank (priority for relay)
       OGN_RxPacket<OGN1_Packet> *PrevRxPacket = RelayQueue.addNew(RxPacketIdx);
       // uint8_t Len=RxPacket->WritePOGNT(Line);
     }
   }
   // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d %08X\n", millis(), Size, RSSI, SNR, RxPacket->RxErr, RxPacket->Packet.HeaderWord);
   // RxPktData->Print(CONS_UART_Write, 1);
-  LED_OFF(); }
+  RxFIFO.Read(); }
+
+extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
+
+static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // RF configuration reuired for OGN to work
+{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
+  SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
+  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
+  SX126xSetPacketParams(&SX126x.PacketParams);
+  SX126xSetSyncWord((uint8_t *)SyncWord); }
 
 static void OGN_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20, 8, OGN1_SYNC); }
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+  OGN_UpdateConfig(OGN1_SYNC, 8); }
 
 // static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
 // { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
 
 static void OGN_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true, 8, OGN1_SYNC); }
+{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
+  OGN_UpdateConfig(OGN1_SYNC+1, 7); }
 
 static int OGN_Transmit(const uint8_t *Data, uint8_t Len=26)      // send packet, but first manchester encode it
 { uint8_t Packet[2*Len];
@@ -594,9 +654,15 @@ void setup()
   delay(100);
 
   Parameters.ReadFromFlash();             // read parameters from Flash
+#ifdef HARD_NAME
+  strcpy(Parameters.Hard, HARD_NAME);
+#endif
+#ifdef SOFT_NAME
+  strcpy(Parameters.Soft, SOFT_NAME);
+#endif
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  Serial.setRxBufferSize(120);
+  Serial.setRxBufferSize(120);            // buffer on RX as there is no multitasking
   // Serial.setTxBufferSize(128);
   // while (!Serial) { }                  // wait for USB serial port to connect
 
@@ -612,7 +678,8 @@ void setup()
   // Pixels.show();
 
   Display.init();                         // Start the OLED
-  OLED_Info();
+  OLED_Logo();
+  // OLED_Info();
   GPS.begin(57600);                                  // Start the GPS
 
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
@@ -626,15 +693,14 @@ void setup()
   OGN_RxConfig();
   Radio.Rx(0);
 
-  RX_RSSI.Set(-2*110); }
+  RX_RSSI.Set(-2*110);
+}
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
 static bool GPS_Done = 0;      // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
-static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
-
-static uint32_t TxTime0, TxTime1;
+static uint32_t TxTime0, TxTime1; // transmision times for the two slots
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
@@ -643,7 +709,7 @@ static int      RxRssiCount=0;              // count RSSI readouts
 static void StartRFslot(void)                                     // start the TX/RX time slot right after the GPS stops sending data
 { if(RxRssiCount) { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
 
-  xorshift64(Random.Word);
+  XorShift64(Random.Word);
   GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
   GPS_Satellites = GPS.Satellites;
   if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_Time = GPS.getUnixTime(); }    // if time and date are valid
@@ -657,19 +723,21 @@ static void StartRFslot(void)                                     // start the T
     GPS_Longitude = GPS.Longitude;
     GPS_GeoidSepar= GPS.GeoidSeparation;
     GPS_LatCosine = GPS.LatitudeCosine;
-    Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude); // set Radio frequency plan
+    Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
   }
   CONS_Proc();
-  BattVoltage = getBatteryVoltage();                          // measure the battery voltage [mV]
+  BattVoltage = getBatteryVoltage();                          // [mv] measure the battery voltage (average over 50 readouts)
+  // analogReadmV(ADC1);                                      // [4mV] a single readout (see HELTEC library for details)
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   RF_Slot=0;
-  Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
+  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_Time, RF_Slot, 1);
+  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
   OGN_TxConfig();
   OGN_RxConfig();
   Radio.Rx(0);
@@ -703,8 +771,10 @@ static void StartRFslot(void)                                     // start the T
 
 void loop()
 {
-  Button_Process();
+  Button_Process();                                               // check for button short/long press
   if(Button_LowPower) { Sleep(); return; }
+
+  Radio_RxProcess();                                              // process received packets, if any
 
   CONS_Proc();                                                    // process input from the console
   if(GPS_Process()==0) { GPS_Idle++; delay(1); }                  // process input from the GPS
@@ -723,17 +793,18 @@ void loop()
   }
 
   uint32_t SysTime=millis();
-  if(RF_Slot==0)
-  { if(TxPkt0 && SysTime >= (GPS_PPS_ms+TxTime0))
+  if(RF_Slot==0)                                                 // 1st half of the second
+  { if(TxPkt0 && SysTime >= (GPS_PPS_ms+TxTime0))                //
     { // printf("TX   #0: %d\n", SysTime);
       OGN_Transmit(*TxPkt0); TxPkt0=0; }
     else if(SysTime >= (GPS_PPS_ms+800))
     { RF_Slot=1;
-      Radio.SetChannel(Radio_FreqPlan.getFrequency(GPS_PPS_Time, RF_Slot, 1));
+      RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_Time, RF_Slot, 1);
+      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
       Radio.Rx(0);
       // printf("Slot #1: %d\n", SysTime);
     }
-  } else
+  } else                                                         // 2nd half of the second
   { if(TxPkt1 && SysTime >= (GPS_PPS_ms+TxTime1))
     { // printf("TX   #1: %d\n", SysTime);
       OGN_Transmit(*TxPkt1); TxPkt1=0; }
