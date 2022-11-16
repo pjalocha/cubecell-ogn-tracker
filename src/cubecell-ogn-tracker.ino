@@ -20,7 +20,7 @@
 #include "nmea.h"
 #include "manchester.h"
 #include "ogn1.h"
-
+#include "crc1021.h"
 #include "freqplan.h"
 #include "rfm.h"
 
@@ -56,8 +56,22 @@ static uint8_t BattCapacity(uint16_t mVolt)
 static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
 // ===============================================================================================
+// GPS: apparently Air530Z is a very different device from Air530, does not look compatible at all
 
 static Air530ZClass GPS;                 // GPS
+
+// details not easy to find: https://www.cnblogs.com/luat/p/14667102.html
+// some control NMEA:
+// $GPCAS01 - serial port baudrate
+// $GPCAS02 - position update rate
+// $GPCAS03 - which NMEA's to send out
+// $GPCAS04 - select navigation system(s)
+// $GPCAS05 - protocol, NMEA version
+// $GPCAS10 - restart cold or warm
+// $GPCAS12 - low power (sleep ?)
+// $GPCAS15 - SBAS control ?
+
+// ===============================================================================================
 
 static SSD1306Wire Display(0x3c, 500000, SDA, SCL, GEOMETRY_128_64, GPIO10 ); // OLED: addr , freq , i2c group , resolution , rst
 
@@ -597,19 +611,28 @@ static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
   OGN_UpdateConfig(OGN1_SYNC+1, 7); }
 
-static int OGN_Transmit(const uint8_t *Data, uint8_t Len=26)      // send packet, but first manchester encode it
-{ uint8_t Packet[2*Len];
-  uint8_t PktIdx=0;
-  for(uint8_t Idx=0; Idx<Len; Idx++)
+static int OGN_Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uint8_t SignLen=0)      // send packet, but first manchester encode it
+{ static uint8_t TxPacket[2*26+64+4];                                  // buffer to fit manchester encoded packet and the digital signature
+  uint8_t TxLen=0;
+  for(uint8_t Idx=0; Idx<PktLen; Idx++)
   { uint8_t Byte=Data[Idx];
-    Packet[PktIdx++]=ManchesterEncode[Byte>>4];                   // software manchester encode every byte
-    Packet[PktIdx++]=ManchesterEncode[Byte&0x0F];
+    TxPacket[TxLen++]=ManchesterEncode[Byte>>4];                      // software manchester encode every byte
+    TxPacket[TxLen++]=ManchesterEncode[Byte&0x0F];
   }
-  Radio.Send(Packet, 2*Len);
-  return 0; }
+  if(SignLen && Sign)
+  { uint16_t CRC = 0xFFFF;
+    for(uint8_t Idx=0; Idx<SignLen; Idx++)                          // digital signature
+    { uint8_t Byte=Sign[Idx];
+      CRC = crc1021(CRC, Byte);                                     // pass through the CRC
+      TxPacket[TxLen++]=Byte; }                                       // copy the bytes directly, without Manchester encoding
+    TxPacket[TxLen++] = CRC>>8;                                     // append CRC
+    TxPacket[TxLen++] = CRC;
+  }
+  Radio.Send(TxPacket, 2*TxLen);
+  return TxLen; }
 
-static int OGN_Transmit(OGN_TxPacket<OGN1_Packet> &TxPacket)
-{ return OGN_Transmit(TxPacket.Byte(), TxPacket.Bytes); }
+static int OGN_Transmit(OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=0)
+{ return OGN_Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
 // ===============================================================================================
 
@@ -698,9 +721,12 @@ void setup()
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
-static bool GPS_Done = 0;      // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
+static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
+static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
-static uint32_t TxTime0, TxTime1; // transmision times for the two slots
+static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
+
+static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
