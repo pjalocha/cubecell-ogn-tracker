@@ -24,6 +24,22 @@
 #include "freqplan.h"
 #include "rfm.h"
 
+// ===============================================================================================
+
+#ifdef WITH_SIGNATURE
+
+#include <secp256k1.h>
+#include <secp256k1_recovery.h>
+
+static secp256k1_context *Ctx = 0;      // context for all secp256k1 operations
+
+static uint8_t SecKey[32];              // Private Key: 32 bytes
+static secp256k1_pubkey PubKey;         // Public Key: some internal representation, 64 bytes, not portable
+
+#endif
+
+// ===============================================================================================
+
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
@@ -259,7 +275,7 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   GPS_Random_Update(Pos.Speed);
   GPS_Random_Update(Pos.Latitude);
   GPS_Random_Update(Pos.Longitude);
-  XorShift32(Random.GPS); }
+  XorShift64(Random.Word); }
 
 // ===============================================================================================
 
@@ -528,7 +544,7 @@ static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" pa
 
 static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
 { if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
-  XorShift32(Random.RX);                              // produce a new random number
+  XorShift64(Random.Word);                             // produce a new random number
   uint8_t Idx=RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
   if(RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
   memcpy(Packet->Packet.Byte(), RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
@@ -562,7 +578,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
     RxPkt->Data[Idx]=(ByteH<<4) | ByteL;
     RxPkt->Err [Idx]=(ErrH <<4) | ErrL ; }
   RxFIFO.Write();                                                      // put packet into the RxFIFO
-  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift32(Random.RX);       // update random number
+  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word);     // update random number
   LED_OFF(); }
 
 static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
@@ -673,6 +689,8 @@ static void Button_Process(void)
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
 
+  Random.Word ^= getUniqueID();
+
   VextON();                               // Turn on power to OLED (and possibly other external devices)
   delay(100);
 
@@ -711,6 +729,19 @@ void setup()
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
   Radio.Init(&Radio_Events);
+  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
+  OGN_TxConfig();
+  OGN_RxConfig();
+  Radio.Rx(0);
+  Random.RX  ^= Radio.Random();
+  Random.GPS ^= Radio.Random();
+  XorShift64(Random.Word);
+
+#ifdef WITH_SIGNATURE
+  Ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN); // Context for signing
+  secp256k1_context_randomize(Ctx, (uint8_t *)&Random);   // randomize the context
+#endif
+
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
   OGN_RxConfig();
