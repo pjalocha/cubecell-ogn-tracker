@@ -746,7 +746,7 @@ void setup()
   // OLED_Info();
   uECC_set_rng(&RNG);
   SignKey.Init();
-  // SignKey.Print();
+  SignKey.PrintKeys();
   // Serial.println("SignKey ready\n");
 
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
@@ -759,8 +759,8 @@ void setup()
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
 
-static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
-static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
+// static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
+// static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
 static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
@@ -790,12 +790,15 @@ static void StartRFslot(void)                                     // start the T
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
+    // uint32_t HashTime=millis();
+    SignKey.Hash(GPS_PPS_Time, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes);       // produce SHA256 hash
+    // HashTime = millis()-HashTime;
+    // printf("Hash: %d ms\n\r", HashTime);
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
   }
   CONS_Proc();
   BattVoltage = getBatteryVoltage();                          // [mv] measure the battery voltage (average over 50 readouts)
-  // analogReadmV(ADC1);                                      // [4mV] a single readout (see HELTEC library for details)
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
