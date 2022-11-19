@@ -26,17 +26,11 @@
 
 // ===============================================================================================
 
-#ifdef WITH_SIGNATURE
+#include <uECC.h>
 
-#include <secp256k1.h>
-#include <secp256k1_recovery.h>
+#include "uecc-signkey.h"
 
-static secp256k1_context *Ctx = 0;      // context for all secp256k1 operations
-
-static uint8_t SecKey[32];              // Private Key: 32 bytes
-static secp256k1_pubkey PubKey;         // Public Key: some internal representation, 64 bytes, not portable
-
-#endif
+static uECC_SignKey SignKey;
 
 // ===============================================================================================
 
@@ -124,6 +118,18 @@ static union
     uint32_t GPS;
   } ;
 } Random = { 0x0123456789ABCDEF };
+
+static int RNG(uint8_t *Data, unsigned Size)
+{ while(Size)
+  { Random.Word += micros();
+    XorShift64(Random.Word);
+    const uint8_t *Src = (const uint8 *)&Random.Word;
+    for(int Idx=0; Idx<8; Idx++)
+    { if(Size==0) break;
+      *Data++ = Src[Idx];
+      Size--; }
+  }
+  return 1; }
 
 // ===============================================================================================
 // CONSole UART
@@ -737,10 +743,8 @@ void setup()
   Random.GPS ^= Radio.Random();
   XorShift64(Random.Word);
 
-#ifdef WITH_SIGNATURE
-  Ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN); // Context for signing
-  secp256k1_context_randomize(Ctx, (uint8_t *)&Random);   // randomize the context
-#endif
+  uECC_set_rng(&RNG);
+  SignKey.Init();
 
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
