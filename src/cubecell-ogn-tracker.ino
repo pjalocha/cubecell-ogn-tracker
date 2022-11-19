@@ -26,8 +26,6 @@
 
 // ===============================================================================================
 
-#include <uECC.h>
-
 #include "uecc-signkey.h"
 
 static uECC_SignKey SignKey;
@@ -121,7 +119,8 @@ static union
 
 static int RNG(uint8_t *Data, unsigned Size)
 { while(Size)
-  { Random.Word += micros();
+  { Random.GPS += micros();
+    Random.RX  += analogReadmV(ADC1);
     XorShift64(Random.Word);
     const uint8_t *Src = (const uint8 *)&Random.Word;
     for(int Idx=0; Idx<8; Idx++)
@@ -726,9 +725,9 @@ void setup()
 
   Display.init();                         // Start the OLED
   OLED_Logo();
-  // OLED_Info();
   GPS.begin(57600);                                  // Start the GPS
 
+  // Serial.println("GPS started");
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
 
   Radio_Events.TxDone    = Radio_TxDone;             // Start the Radio
@@ -739,12 +738,16 @@ void setup()
   OGN_TxConfig();
   OGN_RxConfig();
   Radio.Rx(0);
+  // Serial.println("Radio started\n");
   Random.RX  ^= Radio.Random();
   Random.GPS ^= Radio.Random();
   XorShift64(Random.Word);
 
+  // OLED_Info();
   uECC_set_rng(&RNG);
   SignKey.Init();
+  // SignKey.Print();
+  // Serial.println("SignKey ready\n");
 
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
