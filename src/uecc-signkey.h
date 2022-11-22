@@ -11,7 +11,11 @@ class uECC_SignKey
    uint32_t CRC;           // Check-sum for the data in the flash
 
    uint8_t MsgHash[32];    // Message Hash
-   uint8_t Signature[68];  // Recoverable signature
+
+   // static const int SignBytes = 64+4;
+   // static const int SignBits = SignBytes*8;
+
+   uint8_t Signature[64+4];                                          // Recoverable signature with CRC
 
    static const uint32_t FlashPageSize = 256;
    static const uint32_t FlashAddr = 507*FlashPageSize;              // 510-511 are taken, 508-509 are the OGN Parameters
@@ -19,14 +23,26 @@ class uECC_SignKey
    SHA256 HashProc;        // SHA-256 processor
 
    const struct uECC_Curve_t *Curve;
+   union
+   { uint8_t Flags;
+     struct
+     { bool KeysReady: 1;
+       bool HashReady: 1;
+       bool SignReady: 1;
+       // bool TxDone   : 1;
+     } ;
+   } ;
 
   public:
    void Init(void)
-   { Curve = uECC_secp256k1();                          // choose the Curve
+   { Flags = 0;
+     Curve = uECC_secp256k1();                          // choose the Curve
      ReadFromFlash();                                   // read from Flash
-     if(CRC!=CalcCRC())                                 // if CRC is bad
-     { if(uECC_make_key(PublicKey, PrivateKey, Curve))  // produce the pirvte and public key
-         WriteToFlash(); }                              // store in Flash
+     if(CRC==CalcCRC()) KeysReady=1;                    // if CRC is good
+     else                                               // if CRC is bad
+     { if(uECC_make_key(PublicKey, PrivateKey, Curve))  // produce the private and public key
+       { WriteToFlash(); KeysReady=1; }                 // store in Flash
+     }
    }
 
    int CompressPubKey(uint8_t *ComprPubKey)
@@ -38,13 +54,15 @@ class uECC_SignKey
    void Hash(uint32_t Time, const uint8_t *Packet, uint8_t PktBytes=20)      // Hash an (OGN) packet with the UTC time
    { HashProc.doUpdate((const uint8_t *)&Time, sizeof(uint32_t));
      HashProc.doUpdate(Packet, PktBytes);
-     HashProc.doFinal(MsgHash); }
+     HashProc.doFinal(MsgHash); HashReady=1; SignReady=0; }
 
-//     int OK=Sign(Signature, MsgHash, 32);
-//     // Signature[64] = ???;
-//     return OK; }                                                           // 1=success, 0=failure
+   int Sign(void)
+   { if(!Sign(Signature, MsgHash, 32)) { SignReady=0; return 0; }
+     Signature[64] = 0x80;
+     SetSignCRC(Signature);
+     SignReady=1; return 1; }                                              // 1=success, 0=failure
 
-   static void PrintBytes(const uint8_t *Data, int Bytes)     // hex-print give n number of bytes
+   static void PrintBytes(const uint8_t *Data, int Bytes)                  // hex-print give n number of bytes
    { for(int Idx=0; Idx<Bytes; Idx++)
       printf("%02X", Data[Idx]);
    }
@@ -80,6 +98,32 @@ class uECC_SignKey
          Byte>>=1; }
      }
      return ~CRC; }
+
+// polynomials from: https://users.ece.cmu.edu/~koopman/crc/crc31.html
+  static uint32_t CRC31_PassBit(uint32_t CRC, uint8_t Bit)     // pass a single bit through the CRC polynomial
+  { const uint32_t Poly = 0xC1E52417;
+    CRC = (CRC<<1) | Bit;
+    if(CRC&0x80000000) CRC ^= Poly;
+    return CRC; }
+
+  static uint32_t CRC31_PassByte(uint32_t CRC, uint8_t Byte)     // pass a byte through the CRC polynomial
+  { for(uint8_t Bit=0; Bit<8; Bit++)
+    { CRC = CRC31_PassBit(CRC, Byte>>7);
+      Byte<<=1; }
+    return CRC; }
+
+  static uint32_t SetSignCRC(uint8_t *Sign)
+  { uint32_t CRC = 0;
+    for(uint8_t Idx=0; Idx<64; Idx++)
+    { CRC = CRC31_PassByte(CRC, Sign[Idx]); }
+    CRC = CRC31_PassBit(CRC, Sign[64]>>7);
+    for(uint8_t Idx=0; Idx<31; Idx++)
+    { CRC = CRC31_PassBit(CRC, 0); }
+    Sign[64] = (Sign[64]&0x80) | (CRC>>24);
+    Sign[65] = CRC>>16;
+    Sign[66] = CRC>> 8;
+    Sign[67] = CRC    ;
+    return CRC; }
 
 } ;
 

@@ -68,7 +68,7 @@ template <class OGNx_Packet=OGN1_Packet>
    static const int     Words =  7;
    static const int     Bytes = 26;
 
-   OGNx_Packet Packet;     // OGN packet
+   OGNx_Packet Packet;    // OGN packet
 
    uint32_t FEC[2];       // Gallager code: 48 check bits for 160 user bits
 
