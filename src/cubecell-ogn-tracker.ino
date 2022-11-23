@@ -459,7 +459,7 @@ static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  96,   0, 0); Pixel
 static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); Pixels.show(); }
 static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
-static void LED_Violet(void) { Pixels.setPixelColor( 0, 128,   0, 255, 0); Pixels.show(); }
+static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixels.show(); }
 
 // ===============================================================================================
 // OGN packets
@@ -658,7 +658,7 @@ static int OGN_Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0,
   Radio.Send(TxPacket, TxLen);
   return TxLen; }
 
-static int OGN_Transmit(OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=0)
+static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68)
 { return OGN_Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
 // ===============================================================================================
@@ -820,8 +820,8 @@ static void StartRFslot(void)                                     // start the T
   OGN_RxConfig();
   // Serial.printf("StartRFslot() #3\n");
   Radio.Rx(0);
-  TxTime0 = Random.RX  % 389; TxTime0 += 400;                 // transmit times within slots
-  TxTime1 = Random.GPS % 299; TxTime1 += 800;
+  TxTime0 = Random.RX  % 389;                                 // transmit times within slots
+  TxTime1 = Random.GPS % 299;
   TxPkt0=TxPkt1=0;
   if(TxPos) TxPkt0 = TxPkt1 = &TxPosPacket;
   static uint8_t InfoTxBackOff=0;
@@ -846,7 +846,6 @@ static void StartRFslot(void)                                     // start the T
   { if(Random.RX&0x20) TxPkt1 = &TxRelPacket;
                   else TxPkt0 = &TxRelPacket;
     RelayTxBackOff = Random.RX%3; }
-  LED_OFF();
   GPS_Next();
   XorShift64(Random.Word);
   static uint8_t SignTxBackOff=0;
@@ -856,9 +855,13 @@ static void StartRFslot(void)                                     // start the T
   { if(TxPos && SignKey.KeysReady && SignKey.HashReady)
     { LED_Violet(); // Serial.printf("Sign: calc. start\n");
       SignKey.Sign();                                              // calc. the signature
-      LED_OFF(); // Serial.printf("Sign: calc. stop\n");
+      // Serial.printf("Sign: calc. stop\n");
+      TxTime0>>=1;
       SignTxBackOff = 6 + (Random.RX%7); }
   }
+  TxTime0 += 400;
+  TxTime1 += 800;
+  LED_OFF();
 }
 
 void loop()
@@ -888,9 +891,11 @@ void loop()
   uint32_t SysTime = millis() - GPS_PPS_ms;
   if(RF_Slot==0)                                                 // 1st half of the second
   { if(TxPkt0 && SysTime >= TxTime0)                             //
-    { // Serial.printf("TX[0]:%4dms %08X [%d:%d]\n", SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0);
-      if(SignKey.SignReady && SignTxPkt==TxPkt0) OGN_Transmit(*TxPkt0, SignKey.Signature);
-                                            else OGN_Transmit(*TxPkt0);
+    { int TxLen=0;
+      if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
+                                            else TxLen=OGN_Transmit(*TxPkt0);
+      // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
+      //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
       TxPkt0=0; }
     else if(SysTime >= 800)
     { RF_Slot=1;
@@ -901,9 +906,11 @@ void loop()
     }
   } else                                                         // 2nd half of the second
   { if(TxPkt1 && SysTime >= TxTime1)
-    { // Serial.printf("TX[1]:%4dms %08X [%d:%d]\n", SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1);
-      if(SignKey.SignReady && SignTxPkt==TxPkt1) OGN_Transmit(*TxPkt1, SignKey.Signature);
-                                            else OGN_Transmit(*TxPkt1);
+    { int TxLen=0;
+      if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
+                                            else TxLen=OGN_Transmit(*TxPkt1);
+      // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
+      //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
       TxPkt1=0; }
   }
 
