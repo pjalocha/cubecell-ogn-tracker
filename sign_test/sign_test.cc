@@ -2,6 +2,12 @@
 // you need to install the secp256k1 library: https://github.com/bitcoin-core/secp256k1.git
 // and configure it with the --enable-module-recovery option
 
+// Some details on the principle of the public key recovery and a python example are described here:
+// https://medium.com/asecuritysite-when-bob-met-alice/crypto-magic-recovering-alices-public-key-from-an-ecdsa-signature-e7193df8df6e
+
+// for the OGN-Tracker we use the uECC library, which was the only one I manage to compile, link and run on CubeCell
+// https://github.com/kmackay/micro-ecc.git
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -10,6 +16,8 @@
 
 #include <secp256k1.h>             // classical encryption stuff
 #include <secp256k1_recovery.h>    // more advanced: recover public key from the signature - library needs to be configured with --enable-module-recovery
+
+// #include "uecc-signkey.h"
 
 static void SetRandom(uint8_t *Data, int Bytes)            // a primitive method to produce random bytes
 { for(int Idx=0; Idx<Bytes; Idx++)
@@ -72,7 +80,7 @@ int main(int argc, char *argv[])
 
   secp256k1_ecdsa_sign_recoverable(Ctx, &RecSig, MsgHash, SecKey, NULL, NULL);   // Sign and produce recoverable signature
 
-  // Produce Compact Signature and Recovery ID
+  // Produce Compact Signature and Recovery ID, which can take values 0..3 but only 0/1 was observed in this test
   secp256k1_ecdsa_recoverable_signature_serialize_compact(Ctx, CompRecSig, &RecID, &RecSig);   // Compact Recoverable Signature
   printf("MsgRecSig = "); PrintBytes(CompRecSig, 64); printf(" RecID:%02X\n", RecID);        // (hex-printable)
 
