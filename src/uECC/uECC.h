@@ -27,7 +27,7 @@ platform. */
    Optimization level 4 currently only has an effect ARM platforms where more than one
    curve is enabled. */
 #ifndef uECC_OPTIMIZATION_LEVEL
-    #define uECC_OPTIMIZATION_LEVEL 3
+    #define uECC_OPTIMIZATION_LEVEL 2
 #endif
 
 /* uECC_SQUARE_FUNC - If enabled (defined as nonzero), this will cause a specific function to be

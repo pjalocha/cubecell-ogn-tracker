@@ -56,22 +56,24 @@ int main(int argc, char *argv[])
   int SignLen = ReadBytes(CompRecSig, 68, argv[2]);                  // read the recoverable signature
   printf("Sign[%2d] ", SignLen); PrintBytes(CompRecSig, SignLen); RecID=CompRecSig[64]>>6; RecID=0; printf(" RecID:%d\n", RecID);
 
-  if(argc>3)
+                                                                     // Parse the Compact Recoverable Signature
+  int RecSigOK = secp256k1_ecdsa_recoverable_signature_parse_compact(Ctx, &RecSig, CompRecSig, RecID); // parse the Recoverable Signature
+  printf("RecSigOK = %d\n", RecSigOK);
+                                                                     // convert to "normal" signature
+  int ConvOK = secp256k1_ecdsa_recoverable_signature_convert(Ctx, &Sig, &RecSig);
+  printf("ConvOK = %d\n", ConvOK);
+
+  if(argc>3)                                                         // if public key is given
   { int KeyLen = ReadBytes(ComprPubKey, 33, argv[3]);
-    printf("PubKey[%2d] ", SignLen); PrintBytes(ComprPubKey, KeyLen); printf("\n");
+    printf("PubKey[%2d] ", KeyLen); PrintBytes(ComprPubKey, KeyLen); printf("\n");
 
     size_t PubKeyLen=33;
     int PubKeyOK = secp256k1_ec_pubkey_parse(Ctx, &PubKey, ComprPubKey, PubKeyLen); // parse the Public Key
     printf("PubKeyOK = %d\n", PubKeyOK);
 
-    // Verify the Signature
-    int VerOK = secp256k1_ecdsa_verify(Ctx, &Sig, MsgHash, &PubKey);
+    int VerOK = secp256k1_ecdsa_verify(Ctx, &Sig, MsgHash, &PubKey); // Verify the Signature
     printf("VerOK = %d\n", VerOK);
   }
-                                                                     // Parse the Compact Recoverable Signature
-  int RecSigOK = secp256k1_ecdsa_recoverable_signature_parse_compact(Ctx, &RecSig, CompRecSig, RecID); // parse the Recoverable Signature
-  printf("RecSigOK = %d\n", RecSigOK);
-
                                                                      // Recover the Public Key from the Recoverable Signature and the Message Hash
   int RecPubKeyOK = secp256k1_ecdsa_recover(Ctx, &PubKey, &RecSig, MsgHash);
   printf("RecPubKeyOK = %d\n", RecPubKeyOK);
@@ -79,6 +81,9 @@ int main(int argc, char *argv[])
   size_t PubKeyLen=33;
   secp256k1_ec_pubkey_serialize(Ctx, ComprPubKey, &PubKeyLen, &PubKey, SECP256K1_EC_COMPRESSED); // recovered Public Key in compressed form
   printf("RecPubKey = "); PrintBytes(ComprPubKey, PubKeyLen); printf("\n");
+
+  int VerOK = secp256k1_ecdsa_verify(Ctx, &Sig, MsgHash, &PubKey);        // Verify the Signature with the recovered Public Key
+  printf("VerOK = %d\n", VerOK);
 
   secp256k1_context_destroy(Ctx);
 

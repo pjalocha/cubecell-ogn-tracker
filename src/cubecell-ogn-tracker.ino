@@ -802,8 +802,6 @@ static void StartRFslot(void)                                     // start the T
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_Time, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
-      // SignKey.PrintHash();
-      // SignKey.PrintSign();
       SignTxPkt = &TxPosPacket; }
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
@@ -856,9 +854,11 @@ static void StartRFslot(void)                                     // start the T
   else
   { if(TxPos && SignKey.KeysReady && SignKey.HashReady)
     { LED_Violet(); // Serial.printf("Sign: calc. start\n");
+      // SignKey.PrintHash();
       SignKey.Sign();                                              // calc. the signature
+      // SignKey.PrintSign();
       // Serial.printf("Sign: calc. stop\n");
-      TxTime0>>=1;
+      TxTime1 = 200 + (TxTime0/2);
       SignTxBackOff = 6 + (Random.RX%7); }
   }
   TxTime0 += 400;
