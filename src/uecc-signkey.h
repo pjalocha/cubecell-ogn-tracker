@@ -15,7 +15,7 @@ class uECC_SignKey
    // static const int SignBytes = 64+4;
    // static const int SignBits = SignBytes*8;
 
-   uint8_t Signature[64+4];                                          // Recoverable signature with CRC
+   uint8_t Signature[64+4];                                          // Recoverable signature with 30-bit CRC
 
    static const uint32_t FlashPageSize = 256;
    static const uint32_t FlashAddr = 507*FlashPageSize;              // 510-511 are taken, 508-509 are the OGN Parameters
@@ -73,16 +73,22 @@ class uECC_SignKey
      CompressPubKey(Signature);
      printf("PubKey: "); PrintBytes(Signature, 33); printf("\n"); }
 
-   int ReadFromFlash(void)
-   { const uint32_t Bytes = 32+64+4;
-     return FLASH_read_at(FlashAddr, (uint8_t *)this, Bytes); }
+   void PrintHash(void)
+   { printf("Hash: "); PrintBytes(MsgHash, 32); printf("\n"); }
 
-   int  WriteToFlash(void)
-   { const uint32_t Bytes = 32+64+4;
-     CRC = CalcCRC();
-     return FLASH_update(FlashAddr, (uint8_t *)this, Bytes); }
+   void PrintSign(void)
+   { printf("Sign: "); PrintBytes(Signature, 68); printf("\n"); }
 
-   uint32_t CalcCRC(void)
+   int ReadFromFlash(void)                 // read the keys from the flash
+   { const uint32_t Bytes = 32+64+4;
+     return FLASH_read_at(FlashAddr, PrivateKey, Bytes); }
+
+   int  WriteToFlash(void)                 // write the keys to flash
+   { const uint32_t Bytes = 32+64+4;
+     CRC = CalcCRC();                      // but first set the CRC
+     return FLASH_update(FlashAddr, PrivateKey, Bytes); }
+
+   uint32_t CalcCRC(void)                  // calc. the CRC of the keys for the flash storage
    { uint32_t CRC=0xFFFFFFFF;
      CRC = CRC32(CRC, PrivateKey, 32);
      CRC = CRC32(CRC, PublicKey , 64);
@@ -99,31 +105,32 @@ class uECC_SignKey
      }
      return ~CRC; }
 
-// polynomials from: https://users.ece.cmu.edu/~koopman/crc/crc31.html
-  static uint32_t CRC31_PassBit(uint32_t CRC, uint8_t Bit)     // pass a single bit through the CRC polynomial
-  { const uint32_t Poly = 0xC1E52417;
-    CRC = (CRC<<1) | Bit;
-    if(CRC&0x80000000) CRC ^= Poly;
-    return CRC; }
+// polynomials from: https://users.ece.cmu.edu/~koopman/crc/crc30.html
+   static uint32_t CRC30_PassBit(uint32_t CRC, uint8_t Bit)     // pass a single bit through the CRC polynomial
+   { const uint32_t Poly = 0x6220E663;
+     CRC = (CRC<<1) | Bit;
+     if(CRC&0x40000000) CRC ^= Poly;
+     return CRC; }
 
-  static uint32_t CRC31_PassByte(uint32_t CRC, uint8_t Byte)     // pass a byte through the CRC polynomial
-  { for(uint8_t Bit=0; Bit<8; Bit++)
-    { CRC = CRC31_PassBit(CRC, Byte>>7);
-      Byte<<=1; }
-    return CRC; }
+   static uint32_t CRC30_PassByte(uint32_t CRC, uint8_t Byte)     // pass a byte through the CRC polynomial
+   { for(uint8_t Bit=0; Bit<8; Bit++)
+     { CRC = CRC30_PassBit(CRC, Byte>>7);
+       Byte<<=1; }
+     return CRC; }
 
-  static uint32_t SetSignCRC(uint8_t *Sign)
-  { uint32_t CRC = 0;
-    for(uint8_t Idx=0; Idx<64; Idx++)
-    { CRC = CRC31_PassByte(CRC, Sign[Idx]); }
-    CRC = CRC31_PassBit(CRC, Sign[64]>>7);
-    for(uint8_t Idx=0; Idx<31; Idx++)
-    { CRC = CRC31_PassBit(CRC, 0); }
-    Sign[64] = (Sign[64]&0x80) | (CRC>>24);
-    Sign[65] = CRC>>16;
-    Sign[66] = CRC>> 8;
-    Sign[67] = CRC    ;
-    return CRC; }
+   static uint32_t SetSignCRC(uint8_t *Sign)
+   { uint32_t CRC = 0;
+     for(uint8_t Idx=0; Idx<64; Idx++)
+     { CRC = CRC30_PassByte(CRC, Sign[Idx]); }
+     CRC = CRC30_PassBit(CRC, Sign[64]>>7);
+     CRC = CRC30_PassBit(CRC, (Sign[64]>>6)&1);
+     for(uint8_t Idx=0; Idx<30; Idx++)
+     { CRC = CRC30_PassBit(CRC, 0); }
+     Sign[64] = (Sign[64]&0xC0) | (CRC>>24);
+     Sign[65] = CRC>>16;
+     Sign[66] = CRC>> 8;
+     Sign[67] = CRC    ;
+     return CRC; }
 
 } ;
 

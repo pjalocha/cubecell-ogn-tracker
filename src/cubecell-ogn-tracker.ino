@@ -802,6 +802,8 @@ static void StartRFslot(void)                                     // start the T
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_Time, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
+      // SignKey.PrintHash();
+      // SignKey.PrintSign();
       SignTxPkt = &TxPosPacket; }
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
