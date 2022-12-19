@@ -42,7 +42,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2022.11.2x"
+#define SOFT_NAME "2022.12.1x"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -268,9 +268,13 @@ static int GPS_Process(void)                           // process serial data st
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
     { if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
-       else GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);       // interpret the position NMEA by the GPS
+       else
+       { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);          // interpret the position NMEA by the GPS
+         if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() || GpsNMEA.isGxGSA())
+         { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }
+       }
       GpsNMEA.Clear(); }
-    Serial.write(Byte);                                // copy character to the console (we could copy only the selected and correct sentences)
+    // Serial.write(Byte);                                // copy character to the console (we could copy only the selected and correct sentences)
     Count++; }                                         // count processed characters
   return Count; }                                      // return number of processed characters
 
@@ -619,6 +623,8 @@ static void Radio_RxProcess(void)                                      // proces
   // Serial.printf("RX[%02X] RSSI:%d, RxErr:%d %08X\n",
   //                 RxPkt->Channel, RxPkt->RSSI, RxPacket->RxErr, RxPacket->Packet.HeaderWord);
   // RxPkt->Print(CONS_UART_Write, 1);
+  uint8_t Len=RxPacket->WritePOGNT(Line);
+  if(Len>=8) { Line[Len-1]=0; Serial.println(Line); }
   RxFIFO.Read();
   LED_OFF(); }
 
@@ -716,8 +722,8 @@ void setup()
 #endif
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  Serial.setRxBufferSize(120);            // buffer on RX as there is no multitasking
-  // Serial.setTxBufferSize(128);
+  Serial.setRxBufferSize(120);            // buffer on RX as there is no multitasking: this call has possibly no effect
+  // Serial.setTxBufferSize(512);            // ths call does not exist
   // while (!Serial) { }                  // wait for USB serial port to connect
 
   Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
