@@ -270,8 +270,8 @@ static int GPS_Process(void)                           // process serial data st
     { if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
        else
        { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);          // interpret the position NMEA by the GPS
-         if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() || GpsNMEA.isGxGSA())
-         { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }
+         // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() || GpsNMEA.isGxGSA())
+         // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }
        }
       GpsNMEA.Clear(); }
     // Serial.write(Byte);                                // copy character to the console (we could copy only the selected and correct sentences)
@@ -464,7 +464,15 @@ static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); Pixel
 static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixels.show(); }
-
+/*
+static void LED_OFF   (void) { Pixels.setPixelColor( 0,   0,   0,   0, 0); delay(1); Pixels.show(); }
+static void LED_Red   (void) { Pixels.setPixelColor( 0, 255,   0,   0, 0); delay(1); Pixels.show(); }
+static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  96,   0, 0); delay(1); Pixels.show(); }
+static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); delay(1); Pixels.show(); }
+static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); delay(1); Pixels.show(); }
+static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); delay(1); Pixels.show(); }
+static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); delay(1); Pixels.show(); }
+*/
 // ===============================================================================================
 // OGN packets
 
@@ -623,8 +631,8 @@ static void Radio_RxProcess(void)                                      // proces
   // Serial.printf("RX[%02X] RSSI:%d, RxErr:%d %08X\n",
   //                 RxPkt->Channel, RxPkt->RSSI, RxPacket->RxErr, RxPacket->Packet.HeaderWord);
   // RxPkt->Print(CONS_UART_Write, 1);
-  uint8_t Len=RxPacket->WritePOGNT(Line);
-  if(Len>=8) { Line[Len-1]=0; Serial.println(Line); }
+  // uint8_t Len=RxPacket->WritePOGNT(Line);
+  // if(Len>=8) { Line[Len-1]=0; Serial.println(Line); }
   RxFIFO.Read();
   LED_OFF(); }
 
