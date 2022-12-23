@@ -68,7 +68,7 @@ class uECC_SignKey
    }
 
    void PrintKeys(void)
-   { printf("PriKey: "); PrintBytes(PrivateKey, 32); printf("\n");
+   { // printf("PriKey: "); PrintBytes(PrivateKey, 32); printf("\n");
      // printf("PubKey: "); PrintBytes(PublicKey , 64); printf("\n");
      CompressPubKey(Signature);
      printf("PubKey: "); PrintBytes(Signature, 33); printf("\n"); }
