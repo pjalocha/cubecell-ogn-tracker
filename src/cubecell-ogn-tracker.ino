@@ -57,7 +57,7 @@ static FlashParameters Parameters;       // parameters stored in Flash: address,
 // ===============================================================================================
 
 static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every second
-static uint8_t  BattCapacity = 0;     // [ %]
+static uint8_t  BattCapacity = 0;        // [ %]
 
 static uint8_t calcBattCapacity(uint16_t mVolt)
 { if(mVolt>=4050) return 100;                                 // 4.05V or above => full capacity
@@ -67,7 +67,9 @@ static uint8_t calcBattCapacity(uint16_t mVolt)
 // static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
 static void ReadBatteryVoltage(void)
-{ BattVoltage  = getBatteryVoltage();                         // [mv] measure the battery voltage (average over 50 readouts)
+{ uint16_t Volt  = getBatteryVoltage();                         // [mv] measure the battery voltage (average over 50 readouts)
+  if(BattVoltage==0) BattVoltage = Volt;
+  else BattVoltage = (BattVoltage*3+Volt+2)/4;
   BattCapacity = calcBattCapacity(BattVoltage); }
 
 // ===============================================================================================
