@@ -555,10 +555,12 @@ static RadioEvents_t Radio_Events;
 
 static void Radio_TxDone(void)
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
+  OGN_RxConfig();
   Radio.Rx(0); }
 
 static void Radio_TxTimeout(void)
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
+  OGN_RxConfig();
   Radio.Rx(0); }
 
 static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
@@ -671,6 +673,7 @@ static int OGN_Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0,
     { uint8_t Byte=Sign[Idx];
       TxPacket[TxLen++]=Byte; }                                       // copy the bytes directly, without Manchester encoding
   }
+  OGN_TxConfig();
   Radio.Send(TxPacket, TxLen);
   return TxLen; }
 
