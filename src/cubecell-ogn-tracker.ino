@@ -270,13 +270,13 @@ static int GPS_Process(void)                           // process serial data st
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
     { if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
-       else
-       { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);          // interpret the position NMEA by the GPS
-         // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() || GpsNMEA.isGxGSA())
-         // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }
-       }
+      else
+      { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
+        // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS sentens
+        // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); } // copy to the console, but this does not work, characters are being lost
+      }
       GpsNMEA.Clear(); }
-    // Serial.write(Byte);                                // copy character to the console (we could copy only the selected and correct sentences)
+    // Serial.write(Byte);                                // copy character to the console (no loss of characters here)
     Count++; }                                         // count processed characters
   return Count; }                                      // return number of processed characters
 
@@ -735,8 +735,8 @@ void setup()
 #endif
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  Serial.setRxBufferSize(120);            // buffer on RX as there is no multitasking: this call has possibly no effect
-  // Serial.setTxBufferSize(512);            // ths call does not exist
+  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
+  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
   // while (!Serial) { }                  // wait for USB serial port to connect
 
   Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
