@@ -25,10 +25,13 @@
 #include "rfm.h"
 
 // ===============================================================================================
+// #define WITH_DIG_SIGN
 
+#ifdef WITH_DIG_SIGN
 #include "uecc-signkey.h"
 
 static uECC_SignKey SignKey;
+#endif
 
 // ===============================================================================================
 
@@ -42,7 +45,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2022.12.23"
+#define SOFT_NAME "2022.12.26"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -771,10 +774,12 @@ void setup()
   XorShift64(Random.Word);
 
   // OLED_Info();
+
+#ifdef WITH_DIG_SIGN
   uECC_set_rng(&RNG);
   SignKey.Init();
   SignKey.PrintKeys();
-  // Serial.println("SignKey ready\n");
+#endif
 
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
@@ -819,9 +824,11 @@ static void StartRFslot(void)                                     // start the T
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
+#ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_Time, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
       SignTxPkt = &TxPosPacket; }
+#endif
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
     TxPos=1; }
@@ -867,6 +874,7 @@ static void StartRFslot(void)                                     // start the T
     RelayTxBackOff = Random.RX%3; }
   GPS_Next();
   XorShift64(Random.Word);
+#ifdef WITH_DIG_SIGN
   static uint8_t SignTxBackOff=0;
   // Serial.printf("SignTx: %2ds %d:%d:%d\n", SignTxBackOff, TxPos, SignKey.KeysReady, SignKey.HashReady);
   if(SignTxBackOff) SignTxBackOff--;
@@ -880,6 +888,7 @@ static void StartRFslot(void)                                     // start the T
       TxTime1 = 200 + (TxTime0/2);
       SignTxBackOff = 6 + (Random.RX%7); }
   }
+#endif
   TxTime0 += 400;
   TxTime1 += 800;
   LED_OFF();
@@ -913,8 +922,12 @@ void loop()
   if(RF_Slot==0)                                                 // 1st half of the second
   { if(TxPkt0 && SysTime >= TxTime0)                             //
     { int TxLen=0;
+#ifdef WITH_DIG_SIGN
       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
                                             else TxLen=OGN_Transmit(*TxPkt0);
+#else
+      TxLen=OGN_Transmit(*TxPkt0);
+#endif
       // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
       TxPkt0=0; }
@@ -928,8 +941,12 @@ void loop()
   } else                                                         // 2nd half of the second
   { if(TxPkt1 && SysTime >= TxTime1)
     { int TxLen=0;
+#ifdef WITH_DIG_SIGN
       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
                                             else TxLen=OGN_Transmit(*TxPkt1);
+#else
+      TxLen=OGN_Transmit(*TxPkt0);
+#endif
       // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
       TxPkt1=0; }
