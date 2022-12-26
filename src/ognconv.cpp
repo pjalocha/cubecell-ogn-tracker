@@ -229,6 +229,35 @@ void XXTEA_Decrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t
   }
 }
 
+static uint32_t XXTEA_MX_KEY0(uint32_t Y, uint32_t Z, uint32_t Sum)
+{ return ((((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + Z)); }
+
+void XXTEA_Encrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops)
+{ const uint32_t Delta = 0x9e3779b9;
+  uint32_t Sum = 0;
+  uint32_t Z = Data[Words-1]; uint32_t Y;
+  for( ; Loops; Loops--)
+  { Sum += Delta;
+    for (uint8_t P=0; P<(Words-1); P++)
+    { Y = Data[P+1];
+      Z = Data[P] += XXTEA_MX_KEY0(Y, Z, Sum); }
+    Y = Data[0];
+    Z = Data[Words-1] += XXTEA_MX_KEY0(Y, Z, Sum); }
+}
+
+void XXTEA_Decrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops)
+{ const uint32_t Delta = 0x9e3779b9;
+  uint32_t Sum = Loops*Delta;
+  uint32_t Y = Data[0]; uint32_t Z;
+  for( ; Loops; Loops--)
+  { for (uint8_t P=Words-1; P; P--)
+    { Z = Data[P-1];
+      Y = Data[P] -= XXTEA_MX_KEY0(Y, Z, Sum); }
+    Z = Data[Words-1];
+    Y = Data[0] -= XXTEA_MX_KEY0(Y, Z, Sum);
+    Sum -= Delta; }
+}
+
 // ==============================================================================================
 
 void XorShift32(uint32_t &Seed)      // simple random number generator

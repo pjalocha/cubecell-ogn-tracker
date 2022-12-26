@@ -76,6 +76,9 @@ void TEA_Decrypt_Key0 (uint32_t* Data, int Loops);
 void XXTEA_Encrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t Loops);
 void XXTEA_Decrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t Loops);
 
+void XXTEA_Encrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops);
+void XXTEA_Decrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops);
+
 void XorShift32(uint32_t &Seed);      // simple random number generator
 void XorShift64(uint64_t &Seed);
 uint64_t inline XorShift64star(uint64_t &Seed)

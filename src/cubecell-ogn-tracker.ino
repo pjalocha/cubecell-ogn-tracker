@@ -20,6 +20,7 @@
 #include "nmea.h"
 #include "manchester.h"
 #include "ogn1.h"
+#include "adsl.h"
 #include "crc1021.h"
 #include "freqplan.h"
 #include "rfm.h"
@@ -541,15 +542,23 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produc
   GPS.Encode(Packet);
   return 1; }
 
+static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce position ADS-L packet
+{ Packet.Init();
+  Packet.setAddress (Parameters.Address);
+  Packet.setAddrType(Parameters.AddrType);
+  Packet.setRelay(0);
+  Packet.setAcftType(Parameters.AcftType);
+  GPS.Encode(Packet);
+  return 1; }
+
 // ===============================================================================================
 // Radio
 
 // OGNv1 SYNC:       0x0AF3656C encoded in Manchester
 static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A, 0x00, 0x00 };
-// OGNv2 SYNC:       0xF56D3738 encoded in Machester
-// static const uint8_t OGN2_SYNC[10] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A, 0x00, 0x00 };
 
-// static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
+// ADS-L SYNC:       0xF5724B18 encoded in Manchester (fixed packet length 0x18 is included)
+static const uint8_t ADSL_SYNC[10] = { 0x55, 0x99, 0x95, 0xA6, 0x9A, 0x65, 0xA9, 0x6A, 0x00, 0x00 };
 
 static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
 static uint8_t RF_Channel = 0; // hopping channel
@@ -645,7 +654,7 @@ static void Radio_RxProcess(void)                                      // proces
 
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
 
-static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // RF configuration reuired for OGN to work
+static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // additional RF configuration reuired for OGN/ADS-L to work
 { SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
   SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
@@ -656,14 +665,19 @@ static void OGN_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   OGN_UpdateConfig(OGN1_SYNC, 8); }
 
-// static void PAW_TxConfig(void)      // incorrect because the PAW preamble needs to be long and the library does not support it
-// { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 1, 1, 0, 0, 0, 0, 20, 8, PAW_SYNC); }
+static void ADSL_TxConfig(void)
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+  OGN_UpdateConfig(ADSL_SYNC, 8); }
 
 static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
   OGN_UpdateConfig(OGN1_SYNC+1, 7); }
 
-static int OGN_Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uint8_t SignLen=68)      // send packet, but first manchester encode it
+static void ADSL_RxConfig(void)
+{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 48, 0, 0, 0, 0, true);
+  OGN_UpdateConfig(ADSL_SYNC+1, 7); }
+
+static int Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uint8_t SignLen=68)      // send packet, but first manchester encode it
 { static uint8_t TxPacket[2*26+64+4];                                  // buffer to fit manchester encoded packet and the digital signature
   uint8_t TxLen=0;
   for(uint8_t Idx=0; Idx<PktLen; Idx++)
@@ -676,12 +690,16 @@ static int OGN_Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0,
     { uint8_t Byte=Sign[Idx];
       TxPacket[TxLen++]=Byte; }                                       // copy the bytes directly, without Manchester encoding
   }
-  OGN_TxConfig();
   Radio.Send(TxPacket, TxLen);
   return TxLen; }
 
 static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68)
-{ return OGN_Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
+{ OGN_TxConfig();
+  return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
+
+static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
+{ ADSL_TxConfig();
+  return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
 
 // ===============================================================================================
 
@@ -789,7 +807,8 @@ void setup()
   RX_RSSI.Set(-2*110);
 }
 
-static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket;
+static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket; // OGN position, status and info packets
+static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
@@ -831,6 +850,9 @@ static void StartRFslot(void)                                     // start the T
 #endif
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
+    getAdslPacket(ADSL_TxPosPacket, GPS);
+    ADSL_TxPosPacket.Scramble();
+    ADSL_TxPosPacket.setCRC();
     TxPos=1; }
   // Serial.printf("StartRFslot() #1\n");
   CONS_Proc();

@@ -26,6 +26,7 @@
 
 #include "ogn1.h"    // OGN v1
 #include "ogn2.h"    // OGN v2
+#include "adsl.h"    // ADS-L
 #include "fanet.h"
 #include "gdl90.h"
 
@@ -52,10 +53,10 @@ template <class OGNx_Packet, class OGNy_Packet>
   if(abs(DistDeltaH)>=200) return 1;                                          // if extrapolation error more than 50m
   int16_t Turn = Packet->DecodeTurnRate();                                    // [0.1deg/s]
   int16_t CFaccel = ((int32_t)Turn*Speed*229+0x10000)>>17;                    // [0.1m/s^2] centrifugal acceleration in turn
-  if(abs(CFaccel)>=50) return 1;                                              // CFaccel at or above 5m/s^2 (0.5g)
+  if(abs(CFaccel)>=25) return 1;                                              // CFaccel at or above 5m/s^2 (0.5g)
   int16_t PrevTurn = PrevPacket->DecodeTurnRate();                            // [0.1deg/s]
   int16_t PrevCFaccel = ((int32_t)PrevTurn*PrevSpeed*229+0x10000)>>17;        // [0.1m/s^2]
-  int32_t DistDeltaR = abs(CFaccel-PrevCFaccel)*TimeDelta*TimeDelta/2;        // [0.1m]
+  int32_t DistDeltaR = abs(CFaccel-PrevCFaccel)*(int32_t)TimeDelta*TimeDelta/2; // [0.1m]
   if(abs(DistDeltaR)>=200) return 1;                                          // [0.1m]
   return 0; }
 
@@ -827,7 +828,7 @@ class GPS_Time
             if(Len==1) mSec = Frac*100;
        else if(Len==2) mSec = Frac*10;
        else if(Len==3) mSec = Frac;
-       else if(Len==4) mSec = Frac/10; 
+       else if(Len==4) mSec = Frac/10;
        else return -1; }
      if(mPrev!=mSec) Same=0;                                  // return 0 when time is valid but did not change
      return Same; }                                           // return 1 when time did not change (both RMC and GGA were for same time)
@@ -891,7 +892,7 @@ class GPS_Position: public GPS_Time
       bool hasBaro  :1;         // pressure sensor information: pressure, standard pressure altitude, temperature, humidity
       // bool hasHum   :1;         //
       bool hasTime  :1;         // Time has been supplied
-      bool hasDate  :1;         // Time has been supplied
+      bool hasDate  :1;         // Date has been supplied
       bool hasRMC   :1;         // GxRMC has been supplied
       bool hasGGA   :1;         // GxGGA has been supplied
       bool hasGSA   :1;         // GxGSA has been supplied
@@ -980,13 +981,13 @@ class GPS_Position: public GPS_Time
    int PrintTime(char *Out)     const { return sprintf(Out, "%02d:%02d:%02d.%03d", Hour, Min, Sec, mSec ); }
 
    void Print(void) const
-   { printf("Time/Date = "); PrintDateTime(); printf(" "); // printf(" = %10ld.%03dsec\n", (long int)UnixTime, mSec);
-     printf("FixQuality/Mode=%d/%d: %d satellites DOP/H/V=%3.1f/%3.1f/%3.1f ", FixQuality, FixMode, Satellites, 0.1*PDOP, 0.1*HDOP, 0.1*VDOP);
-     printf("FixQuality=%d: %d satellites HDOP=%3.1f ", FixQuality, Satellites, 0.1*HDOP);
-     printf("Lat/Lon/Alt = [%+10.6f,%+10.6f]deg %+3.1f(%+3.1f)m LatCosine=%+6.3f ", 0.0001/60*Latitude, 0.0001/60*Longitude, 0.1*Altitude, 0.1*GeoidSeparation, 1.0/(1<<12)*LatitudeCosine);
-     printf("Speed/Heading = %3.1fm/s %05.1fdeg ", 0.1*Speed, 0.1*Heading);
-     printf("Climb = %+5.1fm/s Turn = %+5.1fdeg/sec\n", 0.1*ClimbRate, 0.1*TurnRate);
-   }
+   { printf("Time/Date: "); PrintDateTime();
+     printf(" FixQual/Mode=%d/%d: %d sats DOP/H/V=%3.1f/%3.1f/%3.1f", FixQuality, FixMode, Satellites, 0.1*PDOP, 0.1*HDOP, 0.1*VDOP);
+     printf(" Lat/Lon/Alt = [%+10.6f,%+10.6f]deg %+3.1f(%+3.1f)m LatCos=%+6.3f", 0.0001/60*Latitude, 0.0001/60*Longitude, 0.1*Altitude, 0.1*GeoidSeparation, 1.0/(1<<12)*LatitudeCosine);
+     printf(" Speed/Heading = %3.1fm/s %05.1fdeg", 0.1*Speed, 0.1*Heading);
+     printf(" Climb = %+5.1fm/s", 0.1*ClimbRate);
+     printf(" Turn = %+5.1fdeg/s", 0.1*TurnRate);
+     printf("\n"); }
 
    int Print(char *Out) const
    { int Len=0;
@@ -1010,7 +1011,7 @@ class GPS_Position: public GPS_Time
      Out[Len++]=hasBaro?'B':'_';
      Out[Len++]=hasRMC ?'R':'_';
      Out[Len++]=hasGGA ?'G':'_';
-     Out[Len++]=hasGSA ?'G':'_';
+     Out[Len++]=hasGSA ?'S':'_';
      Out[Len++]=isValid() ?'V':'_';
      Out[Len++]=isTimeValid() ?'T':'_';
      Out[Len++]=isDateValid() ?'D':'_';
@@ -1205,8 +1206,7 @@ class GPS_Position: public GPS_Time
    int ReadRMC(NMEA_RxMsg &RxMsg)
    { if(RxMsg.Parms<11) return -2;                                                        // no less than 12 parameters
      hasGPS = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the GGA says
-     // hasDate = ReadDate((const char *)RxMsg.ParmPtr(8))>0;                                // date
-     if(ReadDate((const char *)RxMsg.ParmPtr(8))<0) setDefaultDate();
+     if(ReadDate((const char *)RxMsg.ParmPtr(8))<0) setDefaultDate();                     // date
      ReadLatitude(*RxMsg.ParmPtr(3), (const char *)RxMsg.ParmPtr(2));                     // Latitude
      ReadLongitude(*RxMsg.ParmPtr(5), (const char *)RxMsg.ParmPtr(4));                    // Longitude
      ReadSpeed((const char *)RxMsg.ParmPtr(6));                                           // Speed
@@ -1242,8 +1242,8 @@ class GPS_Position: public GPS_Time
      ClimbRate = Altitude-RefPos.Altitude;         // [0.1m/s] climb rate as altitude difference
      if(useBaro && hasBaro && RefPos.hasBaro && (abs(Altitude-StdAltitude)<2500) ) // if there is baro data then
      { ClimbRate += StdAltitude-RefPos.StdAltitude; // [0.1m/s] on pressure altitude
-       ClimbRate = (ClimbRate+1)>>1; }
-     Accel = Speed-RefPos.Speed;                   // longitual acceleration
+       ClimbRate = (ClimbRate+1)>>1; }             // take average of the GPS and baro climb rate
+     Accel = Speed-RefPos.Speed;               // longitual acceleration
      if(TimeDiff==100)                             // [ms] if 0.1sec difference
      { ClimbRate*=10;
        TurnRate *=10;
@@ -1330,7 +1330,7 @@ class GPS_Position: public GPS_Time
      if(hasBaro) { Packet.setQNE((StdAltitude+5)/10); }
    }
 
-   void Encode(GDL90_REPORT &Report)
+   void Encode(GDL90_REPORT &Report) const
    { Report.setAccuracy(9, 9);
      int32_t Lat = getCordicLatitude();                                     // Latitude:  [0.0001/60deg] => [cordic]
      int32_t Lon = getCordicLongitude();                                    // Longitude: [0.0001/60deg] => [cordic]
@@ -1348,8 +1348,25 @@ class GPS_Position: public GPS_Time
      Report.setClimbRate(6*MetersToFeet(ClimbRate));
    }
 
-  template <class OGNx_Packet>
-   void Encode(OGNx_Packet &Packet) const
+  void Encode(ADSL_Packet &Packet) const
+  { Packet.setAlt((Altitude+GeoidSeparation+5)/10);
+    Packet.setLat(Packet.OGNtoFNT(Latitude));
+    Packet.setLon(Packet.OGNtoFNT(Longitude));
+    Packet.TimeStamp = (Sec*4+mSec/250)&0x3F;
+    Packet.setSpeed(((uint32_t)Speed*4+5)/10);
+    Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
+    // if(hasClimb) Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
+    //        else  Packet.clrClimb();
+    Packet.setTrack(((uint32_t)Heading*32+112)/225);
+    Packet.Integrity[0]=0; Packet.Integrity[1]=0;
+    if((FixQuality>0)&&(FixMode>=2))
+    { Packet.setHorPrec((HDOP*2+5)/10);
+      Packet.setVerPrec((VDOP*3+5)/10); }
+  }
+
+  // template <class OGNx_Packet>
+  //  void Encode(OGNx_Packet &Packet) const
+   void Encode(OGN1_Packet &Packet) const
    { Packet.Position.FixQuality = FixQuality<3 ? FixQuality:3;             //
      if((FixQuality>0)&&(FixMode>=2)) Packet.Position.FixMode = FixMode-2; //
                                  else Packet.Position.FixMode = 0;
@@ -1401,7 +1418,8 @@ class GPS_Position: public GPS_Time
        Packet.Status.Pressure = (Pressure+16)>>5;
        Packet.EncodeHumidity(Humidity); }
      else
-     { Packet.Status.Pressure = 0;
+     { Packet.Status.Pressure=0;
+       Packet.clrTemperature();
        Packet.clrHumidity(); }
    }
 
@@ -1529,7 +1547,9 @@ class GPS_Position: public GPS_Time
    // { return IntSine((uint16_t)(LatAngle+0x4000)); }
 
    static int16_t calcLatCosine(int16_t LatAngle)
-   { return Icos(LatAngle); }
+   { int16_t LatCos=Icos(LatAngle);
+     if(LatCos<=0) LatCos=1;                                                 // protect against zero as it is used for division
+     return LatCos; }
 
    // int32_t getLatDistance(int32_t RefLatitude) const                      // [m] distance along latitude
    // { return calcLatDistance(RefLatitude, Latitude); }
