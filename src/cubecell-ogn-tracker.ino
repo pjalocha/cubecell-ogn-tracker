@@ -25,6 +25,8 @@
 #include "freqplan.h"
 #include "rfm.h"
 
+// define WITH_ADSL
+
 // ===============================================================================================
 // #define WITH_DIG_SIGN
 
@@ -46,7 +48,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2022.12.26"
+#define SOFT_NAME "2022.12.27"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -754,6 +756,7 @@ void setup()
 #ifdef SOFT_NAME
   strcpy(Parameters.Soft, SOFT_NAME);
 #endif
+  // Parameters.WriteToFlash();
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
   // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
@@ -816,7 +819,11 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
 static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
-static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1, *SignTxPkt;
+static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
+static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;
+
+static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0;
+static bool ADSL_TxSlot=0;
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
@@ -842,6 +849,7 @@ static void StartRFslot(void)                                     // start the T
     GPS_LatCosine = GPS.LatitudeCosine;
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
+    XorShift64(Random.Word);
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
@@ -850,9 +858,13 @@ static void StartRFslot(void)                                     // start the T
 #endif
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
+#ifdef WITH_ADSL
+    ADSL_TxPkt = &TxPosPacket;
     getAdslPacket(ADSL_TxPosPacket, GPS);
-    ADSL_TxPosPacket.Scramble();
+    ADSL_TxPosPacket.Scramble();                              // this call hangs when -Os is used to compile
     ADSL_TxPosPacket.setCRC();
+    ADSL_TxSlot = Random.GPS&0x20;
+#endif
     TxPos=1; }
   // Serial.printf("StartRFslot() #1\n");
   CONS_Proc();
@@ -878,11 +890,11 @@ static void StartRFslot(void)                                     // start the T
   else
   { InfoToggle = !InfoToggle;
     int Ret=0;
-    if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);
-    if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);
+    if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
+    if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);   // if not any then prepare a status packet
     if(Ret>0)
-    { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();
-      if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;
+    { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
+      if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;                // put it randomly into 1st or 2nd time slot
                     else TxPkt0 = &TxInfoPacket;
       InfoTxBackOff = 15 + (Random.RX%3);
     }
@@ -936,19 +948,20 @@ void loop()
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
     { // printf("GPS slot stop: %d [ms]\n\r", millis());
-      StartRFslot();                                             // start the RF slot
+      StartRFslot();                                              // start the RF slot
       GPS_Done=1; }
   }
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
-  if(RF_Slot==0)                                                 // 1st half of the second
-  { if(TxPkt0 && SysTime >= TxTime0)                             //
+  if(RF_Slot==0)                                                  // 1st half of the second
+  { if(TxPkt0 && SysTime >= TxTime0)                              //
     { int TxLen=0;
 #ifdef WITH_DIG_SIGN
       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
                                             else TxLen=OGN_Transmit(*TxPkt0);
 #else
-      TxLen=OGN_Transmit(*TxPkt0);
+      if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0) TxLen=ADSL_Transmit(ADSL_TxPosPacket);
+                                          else TxLen=OGN_Transmit(*TxPkt0);
 #endif
       // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
@@ -960,14 +973,15 @@ void loop()
       Radio.Rx(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
-  } else                                                         // 2nd half of the second
+  } else                                                          // 2nd half of the second
   { if(TxPkt1 && SysTime >= TxTime1)
     { int TxLen=0;
 #ifdef WITH_DIG_SIGN
       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
                                             else TxLen=OGN_Transmit(*TxPkt1);
 #else
-      TxLen=OGN_Transmit(*TxPkt0);
+      if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1) TxLen=ADSL_Transmit(ADSL_TxPosPacket);
+                                          else TxLen=OGN_Transmit(*TxPkt1);
 #endif
       // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
