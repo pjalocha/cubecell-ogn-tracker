@@ -48,7 +48,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2022.12.27"
+#define SOFT_NAME "2022.12.28"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -115,7 +115,9 @@ static void VextOFF(void)                  // Vext default OFF
 static FreqPlan Radio_FreqPlan;       // RF hopping pattern
 
 static FIFO<RFM_FSK_RxPktData, 16> RxFIFO;         // buffer for received packets
-static OGN_PrioQueue<OGN1_Packet, 32> RelayQueue;  // candidate packets to be relayed
+
+const int RelayQueueSize = 32;
+static OGN_PrioQueue<OGN1_Packet, RelayQueueSize> RelayQueue;  // candidate packets to be relayed
 
 static Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
 static uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
@@ -346,6 +348,43 @@ static void OLED_Info(void)                                               // dis
     if(VertPos>=64) break; }                                              // give up when out of display vertical range
   Display.display(); }
 
+static void OLED_Relay(const GPS_Position &GPS)                 // display list of aircrafts on the Relay list
+{ Display.clear();
+  // Display.setFont(ArialMT_Plain_16);
+  Display.setFont(ArialMT_Plain_10);
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  uint8_t VertPos=0;
+  for( uint8_t Idx=0; Idx<RelayQueueSize; Idx++)
+  { OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Rank==0) continue;
+    if(Packet->Packet.Header.NonPos) continue;                     // don't show non-position packets
+    int32_t LatDist, LonDist;
+    if(Packet->Packet.calcDistanceVector(LatDist, LonDist, GPS.Latitude, GPS.Longitude, GPS.LatitudeCosine, 20000)<0) continue;
+    uint32_t Dist= IntFastDistance(LatDist, LonDist);              // [m]
+    uint32_t Dir = IntAtan2((int16_t)LonDist, (int16_t)LatDist);   // [16-bit cyclic]
+    Dir = (Dir*360)>>16;                                           // [deg]
+    uint8_t Len=0;
+    Line[Len++]=HexDigit(Packet->Packet.Position.AcftType);
+    Line[Len++]=':';
+    Line[Len++]='0'+Packet->Packet.Header.AddrType;                // address-type
+    Line[Len++]=':';
+    Len+=Format_Hex(Line+Len, Packet->Packet.Header.Address, 6);   // address
+    Line[Len++]=' ';
+    // Len+=Format_SignDec(Line+Len, -(int16_t)Packet->RxRSSI/2);     // [dBm] RSSI
+    // Len+=Format_String(Line+Len, "dBm ");
+    // Len+=Format_Hex(Line+Len, Packet->Rank);                       // rank for relay
+    // Line[Len++]=' ';
+    // Line[Len++]=':';
+    Len+=Format_UnsDec(Line+Len, Dir, 3);                             // [deg] direction to target
+    Line[Len++]=' ';
+    Len+=Format_UnsDec(Line+Len, (Dist+50)/100, 2, 1);                // [km] distance to target
+    // Len+=Format_UnsDec(Line+Len, Packet->Packet.Position.Time, 2); // [sec] timestamp
+    Len+=Format_String(Line+Len, "km");
+    Line[Len]=0;
+    Display.drawString(0, VertPos, Line);
+    VertPos+=10; if(VertPos>=64) break;
+  }
+  Display.display(); }
+
 static void OLED_GPS(const GPS_Position &GPS)                 // display time, date and GPS data/status
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
@@ -453,12 +492,13 @@ static int OLED_CurrPage = 0;
 
 static void OLED_NextPage(void)
 { OLED_CurrPage++;
-  if(OLED_CurrPage>=3) OLED_CurrPage=0; }
+  if(OLED_CurrPage>=4) OLED_CurrPage=0; }
 
 static void OLED_DispPage(const GPS_Position &GPS)
 { switch(OLED_CurrPage)
-  { case 2: OLED_Info(); break; 
+  { case 2: OLED_Info(); break;
     case 1: OLED_RF(); break;
+    case 3: OLED_Relay(GPS); break;
     default: OLED_GPS(GPS); }
 }
 
