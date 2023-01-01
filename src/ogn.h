@@ -181,11 +181,12 @@ template <class OGNx_Packet=OGN1_Packet>
    uint32_t FEC[2];       // Gallager code: 48 check bits for 160 user bits
 
    union
-   { uint8_t State;       //
+   { uint8_t State;       // state bits and small values
      struct
      { // bool Saved   :1;   // has been already saved in internal storage
        // bool Ready   :1;   // is ready for transmission
        // bool Sent    :1;   // has already been transmitted out
+       bool Alloc   :1;   // allocated in a queue or list
        bool Correct :1;   // correctly received or corrected by FEC
        uint8_t RxErr:4;   // number of bit errors corrected upon reception
        uint8_t Warn :2;   // LookOut warning level
@@ -196,8 +197,8 @@ template <class OGNx_Packet=OGN1_Packet>
    uint8_t RxRSSI;        // [-0.5dBm]
    uint8_t Rank;          // rank: low altitude and weak signal => high rank
 
-   int16_t LatDist;       // [m]
-   int16_t LonDist;       // [m]
+   int16_t LatDist;       // [m] distance along the latitude
+   int16_t LonDist;       // [m] distance along the longitude
    // int16_t AltDist;       // [m]
 
   public:
@@ -244,8 +245,8 @@ template <class OGNx_Packet=OGN1_Packet>
      if(RxRSSI>128)                                                     // [-0.5dB] weaker signal => higher rank
        Rank += (RxRSSI-128)>>2;                                         // 1point/2dB less signal
      if(Packet.Header.Encrypted)  return;                               // for exncrypted packets we only take signal strength
-     RxAltitude -= Packet.DecodeAltitude();                             // [m] lower altitude => higher rank
-     if(RxAltitude>0)
+     RxAltitude -= Packet.DecodeAltitude();                             // [m] receiver altitude - target altitude
+     if(RxAltitude>0)                                                   // 
        Rank += RxAltitude>>6;                                           // 1points/64m of altitude below
      int16_t ClimbRate = Packet.DecodeClimbRate();                      // [0.1m/s] higher sink rate => higher rank
      if(ClimbRate<0)
@@ -591,19 +592,20 @@ template<class OGNx_Packet, uint8_t Size=8>
    uint8_t getNew(void)                                                       // get (index of) a free or lowest rank packet
    { Sum-=Packet[LowIdx].Rank; Packet[LowIdx].Rank=0; Low=0; return LowIdx; } // remove old packet from the rank sum
 
-   uint8_t size(void)
+   uint8_t size(void)                                                        // count all slots with Alloc flag set
    { uint8_t Count=0;
      for(uint8_t Idx=0; Idx<Size; Idx++)
-     { if(Packet[Idx].Rank) Count++; }
+     { if(Packet[Idx].Alloc) Count++; }
      return Count; }
 
-   OGN_RxPacket<OGNx_Packet> *addNew(uint8_t NewIdx)                         // add the new packet to the queue
+   OGN_RxPacket<OGNx_Packet> *addNew(uint8_t NewIdx)                          // add the new packet to the queue
    { OGN_RxPacket<OGNx_Packet> *Prev = 0;
+     Packet[NewIdx].Alloc=1;                                                  // mark this clot as allocated
      uint32_t AddressAndType = Packet[NewIdx].Packet.getAddressAndType();     // get ID of this packet: ID is address-type and address (2+24 = 26 bits)
      for(uint8_t Idx=0; Idx<Size; Idx++)                                      // look for other packets with same ID
      { if(Idx==NewIdx) continue;                                              // avoid the new packet
        if(Packet[Idx].Packet.getAddressAndType() == AddressAndType)           // if another packet with same ID:
-       { Prev=Packet+Idx; clean(Idx); }                                                        // then remove it: set rank to zero
+       { Prev=Packet+Idx; clean(Idx); }                                       // then remove it: set rank to zero
      }
      uint8_t Rank=Packet[NewIdx].Rank; Sum+=Rank;                             // add the new packet to the rank sum
      if(NewIdx==LowIdx) reCalc();
@@ -618,14 +620,16 @@ template<class OGNx_Packet, uint8_t Size=8>
      uint16_t RankIdx = Rand%Sum;
      uint8_t Idx; uint16_t RankSum=0;
      for(Idx=0; Idx<Size; Idx++)
-     { uint8_t Rank=Packet[Idx].Rank; if(Rank==0) continue;
+     { if(Packet[Idx].Alloc==0) continue;
+       uint8_t Rank=Packet[Idx].Rank; if(Rank==0) continue;
        RankSum+=Rank; if(RankSum>RankIdx) return Idx; }
      return Rand%Size; }
 
    void reCalc(void)                                                           // find the lowest rank and calc. the sum of all ranks
    { Sum=Low=Packet[0].Rank; LowIdx=0;                                         // take minimum at the first slot
      for(uint8_t Idx=1; Idx<Size; Idx++)                                       // loop over all other slots
-     { uint8_t Rank=Packet[Idx].Rank;
+     { if(Packet[Idx].Alloc==0) { Low=0; LowIdx=Idx; continue; }
+       uint8_t Rank=Packet[Idx].Rank;
        Sum+=Rank;                                                              // sum up the ranks
        if(Rank<Low) { Low=Rank; LowIdx=Idx; }                                  // update the minimum
      }
@@ -633,14 +637,14 @@ template<class OGNx_Packet, uint8_t Size=8>
 
    void cleanTime(uint8_t Time)                                                // clean up slots of given Time
    { for(int Idx=0; Idx<Size; Idx++)
-     { if(Packet[Idx].Rank==0) continue;
+     { if(Packet[Idx].Alloc==0) continue;
        uint8_t PktTime=Packet[Idx].Packet.Position.Time;
        if( PktTime==Time || PktTime>=60) clean(Idx);
      }
    }
 
-   void clean(uint8_t Idx)                                                      // clean given slot
-   { Sum-=Packet[Idx].Rank; Packet[Idx].Rank=0; Low=0; LowIdx=Idx; }
+   void clean(uint8_t Idx)                                                      // clean given slot, remove it from the sum
+   { Sum-=Packet[Idx].Rank; Packet[Idx].Rank=0; Packet[Idx].Alloc=0; Low=0; LowIdx=Idx; }
 
    void decrRank(uint8_t Idx, uint8_t Decr=1)                                   // decrement rank of given slot
    { uint8_t Rank=Packet[Idx].Rank; if(Rank==0) return;                         // if zero already: do nothing
@@ -652,12 +656,13 @@ template<class OGNx_Packet, uint8_t Size=8>
    uint8_t Print(char *Out)
    { uint8_t Len=0;
      for(uint8_t Idx=0; Idx<Size; Idx++)                                        // loop through the slots
-     { uint8_t Rank=Packet[Idx].Rank;
+     { if(Packet[Idx].Alloc==0) continue;
+       uint8_t Rank=Packet[Idx].Rank;
        Out[Len++]=' '; Len+=Format_Hex(Out+Len, Rank);                          // print the slot Rank
-       if(Rank)                                                                 // if Rank is none-zero
+       // if(Rank)                                                                 // if Rank is none-zero
        { Out[Len++]='/'; Len+=Format_Hex(Out+Len, Packet[Idx].Packet.getAddressAndType() );   // print address-type and address
          Out[Len++]=':';
-         if(Packet[Idx].Header.Encrypted) Len+=Format_String(Out+Len, "ee");
+         if(Packet[Idx].Packet.Header.Encrypted) Len+=Format_String(Out+Len, "ee");
          else Len+=Format_UnsDec(Out+Len, Packet[Idx].Packet.Position.Time, 2); // [sec] print time
        }
      }

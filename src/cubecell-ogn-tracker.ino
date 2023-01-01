@@ -48,7 +48,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2022.12.29"
+#define SOFT_NAME "2023.01.01"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -189,15 +189,27 @@ static void ConsNMEA_Process(void)                              // priocess NMEA
   PrintParameters();                                            // print the new parameter values
   Parameters.WriteToFlash(); }                                  // write new parameter set to flash
 
-static void CONS_CtrlC(void)
-{ PrintParameters(); }
+// static void CONS_CtrlB(void) { Serial.printf("Battery: %5.3fV %d%%\n", 0.001*BattVoltage, BattCapacity); }
+
+static void CONS_CtrlC(void) { PrintParameters(); }
+
+static void CONS_CtrlR(void)
+{ uint8_t Len=Format_String(Line, "Relay: ");
+  Len+=RelayQueue.Print(Line+Len);
+  Len--; Line[Len]=0; Serial.println(Line); }
+
+// const char CtrlB = 'B'-'@';
+const char CtrlC = 'C'-'@';
+const char CtrlR = 'R'-'@';
 
 static int CONS_Proc(void)
 { int Count=0;
   for( ; ; )
   { uint8_t Byte; int Err=CONS_UART_Read(Byte); if(Err<=0) break;
     Count++;
-    if(Byte==0x03) CONS_CtrlC();                                // if Ctrl-C received: print parameters
+    // if(Byte==CtrlB) CONS_CtrlB();                                // print battery voltage and capacity -> crashes, why ?!
+    if(Byte==CtrlC) CONS_CtrlC();                                // if Ctrl-C received: print parameters
+    if(Byte==CtrlR) CONS_CtrlR();                                // print relay queue
     ConsNMEA.ProcessByte(Byte);
     // printf("CONS_Proc() Err=%d, Byte=%02X, State/Len=%d/%d\n\r", Err, Byte, ConsNMEA.State, ConsNMEA.Len);
     if(ConsNMEA.isComplete())
@@ -257,7 +269,7 @@ static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
 static uint32_t GPS_Latitude;          // [1/60000deg]
 static uint32_t GPS_Longitude;         // [1/60000deg]
-static uint32_t GPS_Altitude;          // [0.1m]
+static  int32_t GPS_Altitude;          // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
@@ -352,8 +364,8 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
 {
   const char *AcftTypeName[16] = { "----", "Glid", "Tow ", "Heli",
                                    "SkyD", "Drop", "Hang", "Para",
-                                   "Pwrd", "Jet ", "UFO ", "Ball",
-                                   "Zepp", "UAV ", "Car ", "Fix " } ;
+                                   "Pwrd", "Jet ", "UFO", "Ball",
+                                   "Zepp", "UAV", "Car ", "Fix " } ;
 
   Display.clear();
   // Display.setFont(ArialMT_Plain_16);
@@ -361,7 +373,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   uint8_t VertPos=0;
   for( uint8_t Idx=0; Idx<RelayQueueSize; Idx++)
-  { OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Rank==0) continue;
+  { OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
     if(Packet->Packet.Header.NonPos) continue;                     // don't show non-position packets
     // int32_t LatDist, LonDist;
     // if(Packet->Packet.calcDistanceVector(LatDist, LonDist, GPS.Latitude, GPS.Longitude, GPS.LatitudeCosine, 20000)<0) continue;
@@ -632,7 +644,8 @@ static LDPC_Decoder      Decoder;      // decoder and error corrector for the OG
 static RFM_FSK_RxPktData RxPktData;
 
 static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
-{ RelayQueue.cleanTime((Time-Delay)%60); }            // remove packets 20(default) seconds into the past
+{ uint8_t Sec = (Time-Delay)%60; // Serial.printf("cleanTime(%d)\n", Sec);
+  RelayQueue.cleanTime(Sec); }             // remove packets 20(default) seconds into the past
 
 static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
 { if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
@@ -692,7 +705,9 @@ static void Radio_RxProcess(void)                                      // proces
     if(DistOK)
     { RxPacket->LatDist = LatDist;
       RxPacket->LonDist = LonDist;
-      RxPacket->calcRelayRank(GPS_Altitude/10);                        // calculate the relay-rank (priority for relay)
+      // int32_t Alt = GPS_Altitude/10; if(Alt<0) Alt=0;
+      RxPacket->calcRelayRank(GPS_Altitude/10);                    // calculate the relay-rank (priority for relay)
+      // Serial.printf("GPS:%dm Pkt:%dm/%d => Rank:%d\r\n", GPS_Altitude/10, RxPacket->Packet.DecodeAltitude(), RxPacket->RxRSSI, RxPacket->Rank);
       OGN_RxPacket<OGN1_Packet> *PrevRxPacket = RelayQueue.addNew(RxPacketIdx);
       // uint8_t Len=RxPacket->WritePOGNT(Line);
     }
