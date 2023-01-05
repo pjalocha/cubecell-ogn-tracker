@@ -617,6 +617,8 @@ static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produ
 // ===============================================================================================
 // Radio
 
+// SYNC sequences include extra zero bytes because the API always asks 8 bytes, even when we ask to use part of the SYNC
+
 // OGNv1 SYNC:       0x0AF3656C encoded in Manchester
 static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A, 0x00, 0x00 };
 
@@ -631,12 +633,12 @@ static RadioEvents_t Radio_Events;
 static void Radio_TxDone(void)
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
   OGN_RxConfig();
-  Radio.Rx(0); }
+  Radio.RxBoosted(0); }
 
 static void Radio_TxTimeout(void)
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   OGN_RxConfig();
-  Radio.Rx(0); }
+  Radio.RxBoosted(0); }
 
 static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
 
@@ -854,7 +856,7 @@ void setup()
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
   OGN_RxConfig();
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
   // Serial.println("Radio started\n");
   Random.RX  ^= Radio.Random();
   Random.GPS ^= Radio.Random();
@@ -871,7 +873,7 @@ void setup()
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
   OGN_RxConfig();
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
 
   RX_RSSI.Set(-2*110);
 }
@@ -945,7 +947,7 @@ static void StartRFslot(void)                                     // start the T
   OGN_TxConfig();
   OGN_RxConfig();
   // Serial.printf("StartRFslot() #3\n");
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
   TxTime0 = Random.RX  % 389;                                 // transmit times within slots
   TxTime1 = Random.GPS % 299;
   TxPkt0=TxPkt1=0;
@@ -1036,7 +1038,7 @@ void loop()
     { RF_Slot=1;
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_Time, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
-      Radio.Rx(0);
+      Radio.RxBoosted(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // 2nd half of the second
