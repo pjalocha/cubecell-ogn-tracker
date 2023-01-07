@@ -48,7 +48,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.06"
+#define SOFT_NAME "2023.01.07"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -321,11 +321,13 @@ static uint8_t OLED_isON=0;
 
 static void OLED_ON(void)
 { if(OLED_isON) return;
-  Display.init(); }
+  // Serial.println("OLED: ON");
+  Display.init(); OLED_isON=1; }
 
 static void OLED_OFF(void)
 { if(!OLED_isON) return;
-  Display.init(); }
+  // Serial.println("OLED: OFF");
+  Display.stop(); OLED_isON=0; }
 
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
@@ -526,7 +528,8 @@ static void OLED_NextPage(void)
   if(OLED_CurrPage>=4) OLED_CurrPage=0; }
 
 static void OLED_DispPage(const GPS_Position &GPS)
-{ switch(OLED_CurrPage)
+{ if(!OLED_isON) return;
+  switch(OLED_CurrPage)
   { case 2: OLED_Info(); break;
     case 1: OLED_RF(); break;
     case 3: OLED_Relay(GPS); break;
@@ -801,21 +804,26 @@ static void Sleep(void)
 
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell if button is being pressed or not at this moment
 
-static uint32_t Button_PrevSysTime=0;               // previous sys-time when the Button_Process() was called
-static uint32_t Button_PressTime=0;                 // count the time the button is pressed
-static bool Button_LowPower=0;
+static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
+static uint32_t Button_PressTime=0;                 // [ms] count the time the button is pressed
+static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
+static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
 
-static void Button_Process(void)
+static void Button_Process(void)                    // process the button push/release
 { uint32_t SysTime = millis();                      // [ms]
   uint32_t Diff = SysTime-Button_PrevSysTime;       // [ms] since previous call
   if(!Button_isPressed())                           // if button not pressed (any more)
   { if(Button_PressTime>=100)                       // if was pressed for at least 100ms
     { if(OLED_isON) OLED_NextPage();                // either switch OLED page
                else OLED_ON(); }                    // or turn the OLED back ON
+    Button_IdleTime += Diff;                        // [ms] count the idle time
+    if(Button_IdleTime>60000) Button_IdleTime=60000; // [ms] top it at 60 sec
+    if(Button_IdleTime>=20000) OLED_OFF();          // turn off OLED when idle more than 20sec
     Button_PressTime=0;                             // clear the press-time counter
     Button_LowPower=0; }                            // reset counter to enter sleep
   else                                              // when button is pressed
   { Button_PressTime += Diff;                       // accumulate the press-time
+    Button_IdleTime = 0;                            // clear idle time
     if(Button_PressTime>=1000) Button_LowPower=1;   // if more than one second then declare low-power request
   }
   Button_PrevSysTime=SysTime; }
