@@ -48,7 +48,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.01"
+#define SOFT_NAME "2023.01.06"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -162,7 +162,7 @@ int  CONS_UART_Read (uint8_t &Byte)
 
 // ===============================================================================================
 
-static NMEA_RxMsg ConsNMEA;
+static NMEA_RxMsg ConsNMEA;                                     // NMEA catcher for console
 
 static void PrintParameters(void)                               // print parameters stored in Flash
 { Parameters.Print(Line);                                       // single line, most essential parameters
@@ -279,7 +279,7 @@ static uint32_t GPS_PPS_Time = 0;                      // [sec] Unix time which 
 
 static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
 
-static NMEA_RxMsg GpsNMEA;                             // NMEA catcher
+static NMEA_RxMsg GpsNMEA;                             // NMEA catcher for GPS
 
 static int GPS_Process(void)                           // process serial data stream from the GPS
 { int Count=0;
@@ -726,6 +726,7 @@ extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/
 
 static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // additional RF configuration reuired for OGN/ADS-L to work
 { SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
+  SX126xSetModulationParams(&SX126x.ModulationParams);
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
   SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
   SX126xSetPacketParams(&SX126x.PacketParams);
@@ -740,11 +741,13 @@ static void ADSL_TxConfig(void)
   OGN_UpdateConfig(ADSL_SYNC, 8); }
 
 static void OGN_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 52, 0, 0, 0, 0, true);
+{ Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 52, 0, 0, 0, 0, true);
+  // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadLen [bytes], CRC [bool],
+  // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
   OGN_UpdateConfig(OGN1_SYNC+1, 7); }
 
 static void ADSL_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 250000, 100000, 0, 250000, 1, 100, 1, 48, 0, 0, 0, 0, true);
+{ Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true);
   OGN_UpdateConfig(ADSL_SYNC+1, 7); }
 
 static int Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uint8_t SignLen=68)      // send packet, but first manchester encode it
