@@ -790,7 +790,8 @@ static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t S
 // ===============================================================================================
 
 static void Sleep(void)
-{ GPS.end();
+{ detachInterrupt(USER_KEY);
+  GPS.end();
   Radio.Sleep();
   OLED_OFF();
   LED_OFF(); // turnOffRGB();
@@ -802,11 +803,9 @@ static void Sleep(void)
   while(1) lowPowerHandler();
 }
 
-static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell if button is being pressed or not at this moment
-
+/*
 static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
 static uint32_t Button_PressTime=0;                 // [ms] count the time the button is pressed
-static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
 static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
 
 static void Button_Process(void)                    // process the button push/release
@@ -827,6 +826,42 @@ static void Button_Process(void)                    // process the button push/r
     if(Button_PressTime>=1000) Button_LowPower=1;   // if more than one second then declare low-power request
   }
   Button_PrevSysTime=SysTime; }
+*/
+
+static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell if button is being pressed or not at this moment
+
+static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
+
+static uint32_t Button_PressTime = 0;
+static uint8_t Button_ShortPush = 0;
+static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
+static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
+
+static void Button_Process(void)                    // process the button push/release: as press-release works on interrupts, this can be now called less often
+{ uint32_t SysTime = millis();                      // [ms]
+  if(Button_isPressed())
+  { uint32_t LongPush=SysTime-Button_PressTime;
+    if(LongPush>1000) Button_LowPower=1; }
+  uint32_t Diff = SysTime-Button_PrevSysTime;
+  if(Button_ShortPush==0)
+  { Button_IdleTime+=Diff;                          // count idle time
+    if(Button_IdleTime>60000) Button_IdleTime=60000; // [ms] top it at 60 sec
+    if(Button_IdleTime>=20000) OLED_OFF(); }        // turn off OLED when idle more than 20sec
+  while(Button_ShortPush)
+  { if(OLED_isON) OLED_NextPage();                  // either switch OLED page
+             else OLED_ON();                        // or turn the OLED back ON
+    Button_IdleTime=0;
+    Button_ShortPush--; }
+  Button_PrevSysTime=SysTime; }
+
+static void Button_ChangeInt(void)  // called by hardware interrupt on button push or release
+{ if(Button_isPressed())            // pressed
+  { Button_PressTime=millis(); }
+  else                              // released
+  { uint32_t Diff = millis()-Button_PressTime;
+    if(Diff<100) return;            // it appears something is "pushing" the button at 1sec interval for 12-13ms ??
+    if(Diff<400) Button_ShortPush++; }
+}
 
 // ===============================================================================================
 
@@ -856,7 +891,8 @@ void setup()
 
   Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
 
-  pinMode(USER_KEY, INPUT);               // push button
+  pinMode(USER_KEY, INPUT_PULLUP);        // push button
+  attachInterrupt(USER_KEY, Button_ChangeInt, CHANGE);
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
@@ -1025,7 +1061,7 @@ static void StartRFslot(void)                                     // start the T
 void loop()
 {
   Button_Process();                                               // check for button short/long press
-  if(Button_LowPower) { Sleep(); return; }
+  if(Button_LowPower) { Sleep(); return; }                        // enter deep sleep when power-off requested
 
   Radio_RxProcess();                                              // process received packets, if any
 
