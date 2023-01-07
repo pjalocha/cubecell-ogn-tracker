@@ -317,6 +317,16 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
 
 // ===============================================================================================
 
+static uint8_t OLED_isON=0;
+
+static void OLED_ON(void)
+{ if(OLED_isON) return;
+  Display.init(); }
+
+static void OLED_OFF(void)
+{ if(!OLED_isON) return;
+  Display.init(); }
+
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
 
@@ -779,7 +789,7 @@ static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t S
 static void Sleep(void)
 { GPS.end();
   Radio.Sleep();
-  Display.stop();
+  OLED_OFF();
   LED_OFF(); // turnOffRGB();
   Wire.end();
   Serial.end();
@@ -789,7 +799,7 @@ static void Sleep(void)
   while(1) lowPowerHandler();
 }
 
-static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; }
+static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell if button is being pressed or not at this moment
 
 static uint32_t Button_PrevSysTime=0;               // previous sys-time when the Button_Process() was called
 static uint32_t Button_PressTime=0;                 // count the time the button is pressed
@@ -799,7 +809,9 @@ static void Button_Process(void)
 { uint32_t SysTime = millis();                      // [ms]
   uint32_t Diff = SysTime-Button_PrevSysTime;       // [ms] since previous call
   if(!Button_isPressed())                           // if button not pressed (any more)
-  { if(Button_PressTime>=100) OLED_NextPage();      // switch to the next OLED page
+  { if(Button_PressTime>=100)                       // if was pressed for at least 100ms
+    { if(OLED_isON) OLED_NextPage();                // either switch OLED page
+               else OLED_ON(); }                    // or turn the OLED back ON
     Button_PressTime=0;                             // clear the press-time counter
     Button_LowPower=0; }                            // reset counter to enter sleep
   else                                              // when button is pressed
@@ -845,8 +857,11 @@ void setup()
   // Pixels.setPixelColor( 0, 255, 0, 0, 0); // Green
   // Pixels.show();
 
-  Display.init();                         // Start the OLED
+  OLED_ON();
+  // Display.init();                                     // Start the OLED
+  // OLED_isON=1;
   OLED_Logo();
+
   GPS.begin(115200);                                  // Start the GPS
 
   // Serial.println("GPS started");
