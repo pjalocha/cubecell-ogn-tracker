@@ -4,6 +4,8 @@
 #include "format.h"
 #include "ognconv.h"
 
+// #pragma GCC optimize("O2")  // XXTEA does not run at default -0s optimization - reason not understood
+
 // ==============================================================================================
 
 int32_t FeetToMeters(int32_t Altitude) { return (Altitude*312+512)>>10; }  // [feet] => [m]
@@ -159,8 +161,7 @@ void TEA_Encrypt (uint32_t* Data, const uint32_t *Key, int Loops)
   { sum += delta;
     v0 += ((v1<<4) + k0) ^ (v1 + sum) ^ ((v1>>5) + k1);
     v1 += ((v0<<4) + k2) ^ (v0 + sum) ^ ((v0>>5) + k3); }  // end cycle
-  Data[0]=v0; Data[1]=v1;
-}
+  Data[0]=v0; Data[1]=v1; }
 
 void TEA_Decrypt (uint32_t* Data, const uint32_t *Key, int Loops)
 { uint32_t v0=Data[0], v1=Data[1];                           // set up
@@ -170,8 +171,7 @@ void TEA_Decrypt (uint32_t* Data, const uint32_t *Key, int Loops)
   { v1 -= ((v0<<4) + k2) ^ (v0 + sum) ^ ((v0>>5) + k3);
     v0 -= ((v1<<4) + k0) ^ (v1 + sum) ^ ((v1>>5) + k1);
     sum -= delta; }                                          // end cycle
-  Data[0]=v0; Data[1]=v1;
-}
+  Data[0]=v0; Data[1]=v1; }
 
 void TEA_Encrypt_Key0 (uint32_t* Data, int Loops)
 { uint32_t v0=Data[0], v1=Data[1];                          // set up
@@ -180,8 +180,7 @@ void TEA_Encrypt_Key0 (uint32_t* Data, int Loops)
   { sum += delta;
     v0 += (v1<<4) ^ (v1 + sum) ^ (v1>>5);
     v1 += (v0<<4) ^ (v0 + sum) ^ (v0>>5); }                 // end cycle
-  Data[0]=v0; Data[1]=v1;
-}
+  Data[0]=v0; Data[1]=v1; }
 
 void TEA_Decrypt_Key0 (uint32_t* Data, int Loops)
 { uint32_t v0=Data[0], v1=Data[1];                           // set up
@@ -190,8 +189,7 @@ void TEA_Decrypt_Key0 (uint32_t* Data, int Loops)
   { v1 -= (v0<<4) ^ (v0 + sum) ^ (v0>>5);
     v0 -= (v1<<4) ^ (v1 + sum) ^ (v1>>5);
     sum -= delta; }                                          // end cycle
-  Data[0]=v0; Data[1]=v1;
-}
+  Data[0]=v0; Data[1]=v1; }
 
 // ==============================================================================================
 // XXTEA encryption/decryption

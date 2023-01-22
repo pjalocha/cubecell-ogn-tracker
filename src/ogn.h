@@ -64,12 +64,12 @@ template <class OGNx_Packet, class OGNy_Packet>
 // ---------------------------------------------------------------------------------------------------------------------
 
 template <class OGNx_Packet=OGN1_Packet>
- class OGN_TxPacket                                    // OGN packet with FEC code, like for transmission
+ class OGN_TxPacket                                    // OGN packet with FEC code, ready for transmission
 { public:
    static const int     Words =  7;
    static const int     Bytes = 26;
 
-   OGNx_Packet Packet;    // OGN packet
+   OGNx_Packet Packet;    // OGN packet [20 bytes = 160 bits]
 
    uint32_t FEC[2];       // Gallager code: 48 check bits for 160 user bits
 
