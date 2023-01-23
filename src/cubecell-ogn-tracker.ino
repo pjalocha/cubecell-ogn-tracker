@@ -71,7 +71,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.22"
+#define SOFT_NAME "2023.01.23"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
