@@ -47,6 +47,19 @@ static uECC_SignKey SignKey;
 #endif
 
 // ===============================================================================================
+// DEBUG pin
+
+#define WITH_DEBUGPIN
+
+#ifdef WITH_DEBUGPIN
+const int DebugPin = GPIO4; // marked "4" on the board
+
+static void DebugPin_Init(void) { pinMode(DebugPin, OUTPUT); }
+
+static void DebugPin_ON(bool ON=1) { digitalWrite(DebugPin, ON); }
+#endif
+
+// ===============================================================================================
 
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
@@ -932,6 +945,9 @@ static void Sleep(void)                            // shut-down all hardware and
   Serial.end();                                    // stop console UART
   pinMode(Vext, ANALOG);
   pinMode(ADC, ANALOG);
+#ifdef WITH_DEBUGPIN
+  pinMode(DebugPin, ANALOG);
+#endif
   while(1) lowPowerHandler(); }                     // never wake up
 
 static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell if button is being pressed or not at this moment
@@ -981,7 +997,9 @@ void setup()
 
   VextON();                               // Turn on power to OLED (and possibly other external devices)
   delay(100);
-
+#ifdef WITH_DEBUGPIN
+  DebugPin_Init();
+#endif
   ReadBatteryVoltage();
 
   Parameters.ReadFromFlash();             // read parameters from Flash
@@ -1154,7 +1172,18 @@ static void EndOfGPS(void)                                 // start the TX/RX ti
 }
 
 void loop()
-{ CY_PM_WFI; //  __WFI();                                         // sleep and wake up on an interrupt
+{
+
+#ifdef WITH_DEBUGPIN
+  DebugPin_ON(1);                                                 // for debug: to watch the sleep time on the scope
+#endif
+
+  CY_PM_WFI; //  __WFI();                                         // sleep and wake up on an interrupt
+
+#ifdef WITH_DEBUGPIN
+  DebugPin_ON(0);
+#endif
+
   Button_Process();                                               // check for button short/long press
   if(Button_LowPower) { Sleep(); return; }                        // enter deep sleep when power-off requested
 
