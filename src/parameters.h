@@ -48,6 +48,7 @@ class FlashParameters
        int8_t         TxPower:  6; // [dBm] highest bit set => HW module (up to +20dBm Tx power)
        bool      RFchipTypeHW:  1; // is this RFM69HW (Tx power up to +20dBm) ?
       uint8_t        FreqPlan:  3; // 0=default or force given frequency hopping plan
+       bool         RelayMode:  1; // Static relay-mode: rarely transmit own position, priority to relays or other aircrafts
      } ;
    } ;
 

@@ -246,7 +246,8 @@ static void ConsNMEA_Process(void)                              // priocess NMEA
 
 // static void CONS_CtrlB(void) { Serial.printf("Battery: %5.3fV %d%%\n", 0.001*BattVoltage, BattCapacity); }
 
-static void CONS_CtrlC(void) { PrintParameters(); }
+static void CONS_CtrlC(void)
+{ PrintParameters(); }
 
 static void CONS_CtrlR(void)
 { uint8_t Len=Format_String(Line, "Relay: ");
@@ -273,6 +274,7 @@ static int CONS_Proc(void)
       ConsNMEA.Clear(); }
     // printf("CONS_Proc() - after if()\n\r" );
   }
+  if(Count) Button_ForceActive();                                   // if characters received on the console then activate the OLED
   return Count; }
 
 // ===============================================================================================
@@ -936,11 +938,14 @@ static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t S
 static void Sleep(void)                            // shut-down all hardware and go to deep sleep
 { detachInterrupt(USER_KEY);                       // stop user-button interrupt
   // detachInterrupt(GPIO11);                         // stop GPS PPS interrupt
+  OLED_ON();
+  OLED_Logo();
   GPS.end();                                       // stop GPS
   detachInterrupt(RADIO_DIO_1);                    // stop Radio interrupt
   Radio.Sleep();                                   // stop Radio
-  OLED_OFF();                                      // stop OLED
   LED_OFF();                                       // stop RGB LED
+  delay(500);
+  OLED_OFF();                                      // stop OLED
   Wire.end();                                      // stop I2C
   Serial.end();                                    // stop console UART
   pinMode(Vext, ANALOG);
@@ -955,7 +960,7 @@ static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell 
 static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
 
 static uint32_t Button_PressTime = 0;
-static uint8_t Button_ShortPush = 0;
+static  uint8_t Button_ShortPush = 0;
 static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
 static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
 
@@ -975,6 +980,9 @@ static void Button_Process(void)                    // process the button push/r
     Button_IdleTime=0;
     Button_ShortPush--; }
   Button_PrevSysTime=SysTime; }
+
+static void Button_ForceActive(void)
+{ Button_IdleTime=0; OLED_ON(); }                   // activate the OLED, as if the user pushed the button
 
 static void Button_ChangeInt(void)  // called by hardware interrupt on button push or release
 { if(Button_isPressed())            // pressed
