@@ -58,7 +58,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.19"
+#define SOFT_NAME "2023.01.22"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -774,17 +774,17 @@ static void Radio_TxDone(void)              // end-of-transmission interrupt
 { RF_TxPackets++;
   uint32_t msTime = millis()-RF_Slot_PPS;   // [ms] relative to the PPS of this RF slot
   int msWait=RxTime(msTime);
-  Serial.printf("TxDone: %4d:%3d\n", msTime, msWait);
+  // Serial.printf("TxDone: %4d:%3d\n", msTime, msWait);
   OGN_RxConfig();
-  if(msWait>0) Radio_Receive(msWait);
+  if(msWait>5) Radio_Receive(msWait);
           else Radio_NewSubSlot(); }         //
 
 static void Radio_TxTimeout(void)
 { uint32_t msTime = millis()-RF_Slot_PPS;    // [ms] relative to PPS
   int msWait=RxTime(msTime);
-  Serial.printf("TxTout: %4d:%3d\n", msTime, msWait);
+  // Serial.printf("TxTout: %4d:%3d\n", msTime, msWait);
   OGN_RxConfig();
-  if(msWait>0) Radio_Receive(msWait);
+  if(msWait>5) Radio_Receive(msWait);
           else Radio_NewSubSlot(); }
 
 static void Radio_NewSlot(void)
@@ -800,7 +800,7 @@ static void Radio_NewSlot(void)
   { Manchester(RF_TxPktData[1], RF_TxPkt[1]->Packet.Byte(), RF_TxPkt[1]->Bytes);
     RF_TxTime[1] = Random.GPS % 389 +  5;
     RF_TxPkt[1] = 0; }
-  printf("RFslot: %d %3d:%3d\n", RF_Slot_UTC, RF_TxTime[0], RF_TxTime[1]);
+  // printf("RFslot: %d %3d:%3d\n", RF_Slot_UTC, RF_TxTime[0], RF_TxTime[1]);
   RF_SubSlot=0; }
 
 static void Radio_NewSubSlot(void)
@@ -813,14 +813,14 @@ static void Radio_NewSubSlot(void)
   RF_Channel=Radio_FreqPlan.getChannel(RF_Slot_UTC, RF_SubSlot, 1); // calc. the channel for this (sub)slot
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));    // set the radio to the channel frequency
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);                 // time to listen (before possible transmission)
-  printf("RFsubSlot: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
+  // printf("RFsubSlot: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(msWait<=0) msWait=450;                          // should never happen but just in case
   Radio_Receive(msWait); }                           // go to receive mode
 
 static void Radio_RxTimeout(void)                  // end-of-receive-period interrupt
 { uint32_t msTime = millis()-RF_Slot_PPS;
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
-  Serial.printf("RxTout: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
+  // Serial.printf("RxTout: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(msWait<=0 && RF_TxTime[RF_SubSlot])
   { Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; /* CY_PM_WFI; */ }
   else Radio_NewSubSlot(); }
@@ -829,8 +829,8 @@ static void Radio_RxTimeout(void)                  // end-of-receive-period inte
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
 { RF_RxPackets++;
   uint32_t msTime = millis()-RF_Slot_PPS;                              // [ms] relative to PPS
-  int msWait=RxTime(msTime);
-  Serial.printf("RxDone: %4d:%3d S%d\n", msTime, msWait, RF_SubSlot);
+  int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
+  // Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(Size!=2*26) { /* CY_PM_WFI; */ return; }                                // for now, only treat OGN packets
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
   SX126xGetPacketStatus(&RadioPktStatus);
@@ -851,7 +851,9 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   RxFIFO.Write();                                                      // put packet into the RxFIFO
   Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word);     // update random number
   if(msWait>0) Radio_Receive(msWait);
-          else Radio_NewSubSlot(); }
+  else if(RF_TxTime[RF_SubSlot])
+  { Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; /* CY_PM_WFI; */ }
+  else Radio_NewSubSlot(); }
 
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
 
@@ -1065,7 +1067,7 @@ static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
 
 static void EndOfGPS(void)                                 // start the TX/RX time slot after the GPS completes sending data
-{ Serial.printf("EoGPS [%d]\n", RxRssiCount);
+{ // Serial.printf("EoGPS [%d]\n", RxRssiCount);
   if(RxRssiCount)
   { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
   XorShift64(Random.Word);
@@ -1169,7 +1171,7 @@ void loop()
   }
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
-    { printf("GPSstop: %ds\n", GPS_PPS_UTC);
+    { // printf("GPSstop: %ds\n", GPS_PPS_UTC);
       EndOfGPS();                                              // start the RF slot
       GPS_Done=1; }
   }
