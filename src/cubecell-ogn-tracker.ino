@@ -332,9 +332,37 @@ static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
 
 static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
-static uint32_t GPS_PPS_UTC = 0;                      // [sec] Unix time which corresponds to the most recent PPS
+static uint32_t GPS_TimeErrSqr = 0;                    // [ms^2] average square error on GPS_PPS_ms
+static uint32_t GPS_PPS_UTC = 0;                       // [sec] Unix time which corresponds to the most recent PPS
 
 static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
+
+static union
+{ uint32_t Flags;
+  struct
+  { bool PowerON   :1;                                 // is turned ON
+    bool BurstDone :1;                                 // data burst is complete
+    bool TimeValid :1;                                 // time is valid
+    bool DateValid :1;                                 // date is valid
+    bool  FixValid :1;                                 // time/position fix is valid
+  } ;
+} GPS_State = { 0 };                                   // single bit state flags
+
+static uint32_t GPS_ON_ms = 0;                         // [ms] when GPS was turned ON
+static uint32_t GPS_OFF_ms = 0;                        // [ms] when GPS was turned OFF
+
+static void GPS_ON(void)
+{ if(GPS_State.PowerON) return;
+  GPS_ON_ms = millis();
+  GPS.begin(115200);
+  GPS_State.Flags=0;
+  GPS_State.PowerON=1; }
+
+static void GPS_OFF(void)
+{ if(!GPS_State.PowerON) return;
+  GPS_OFF_ms = millis();
+  GPS.end();
+  GPS_State.Flags=0; }
 
 static NMEA_RxMsg GpsNMEA;                             // NMEA catcher for GPS
 
@@ -939,8 +967,8 @@ static void Sleep(void)                            // shut-down all hardware and
 { detachInterrupt(USER_KEY);                       // stop user-button interrupt
   // detachInterrupt(GPIO11);                         // stop GPS PPS interrupt
   OLED_ON();
-  OLED_Logo();
-  GPS.end();                                       // stop GPS
+  OLED_Logo();                                     // display logo (for a short time)
+  GPS_OFF();                                       // stop the GPS
   detachInterrupt(RADIO_DIO_1);                    // stop Radio interrupt
   Radio.Sleep();                                   // stop Radio
   LED_OFF();                                       // stop RGB LED
@@ -1052,7 +1080,7 @@ void setup()
     Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
 #endif
 
-  GPS.begin(115200);                                 // Start the GPS
+  GPS_ON();                                             // Turn ON the GPS
   // pinMode(GPIO11, INPUT);                            // GPS PPS ?
   // attachInterrupt(GPIO11, GPS_HardPPS, RISING);
 
@@ -1087,25 +1115,28 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
-static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
+// static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
 
-static void EndOfGPS(void)                                 // start the TX/RX time slot after the GPS completes sending data
+static void EndOfGPS(void)                                 // after the GPS completes sending data
 { // Serial.printf("EoGPS [%d]\n", RxRssiCount);
   if(RxRssiCount)
   { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
   XorShift64(Random.Word);
   GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
   GPS_Satellites = GPS.Satellites;
-  if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
-                                       else  { LED_Yellow(); }
+  GPS_State.TimeValid = GPS.isTimeValid();
+  GPS_State.DateValid = GPS.isDateValid();
+  GPS_State.FixValid = GPS.isValid();
+  if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
+                                           else  { LED_Yellow(); }
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
-  if(GPS.isValid())                                           // if position is valid
+  if(GPS_State.FixValid)                                           // if position is valid
   { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
     GPS_Latitude  = GPS.Latitude;
     GPS_Longitude = GPS.Longitude;
@@ -1198,19 +1229,48 @@ void loop()
   Radio_RxProcess();                                              // process received packets, if any
 
   CONS_Proc();                                                    // process input from the console
-  if(GPS_Process()==0) { GPS_Idle++; /* delay(1); */ }                  // process input from the GPS
-                  else { GPS_Idle=0; /* RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++; */ } // [0.5dBm]
-  if(GPS_Done)                                                    // if state is GPS not sending data
-  { if(GPS_Idle<2)                                                // GPS (re)started sending data
-    { GPS_Done=0;                                                 // change the state to GPS is sending data
-      GPS_PPS_ms = millis() - Parameters.PPSdelay;                // [ms] record the est. PPS time
-      GPS_PPS_UTC++; }                                            // [sec]
+
+// RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++;             // [0.5dBm] this part we need to do in the Radio thread
+  uint32_t msTime = millis();
+  uint32_t msDiff = msTime-GPS_PPS_ms;
+
+  if(msDiff>=1000)                                                 // track the PPS
+  { if(msDiff<1100) Serial.println("GPS:PPS");
+    GPS_PPS_UTC++; GPS_PPS_ms+=1000; }
+
+  if(GPS_State.PowerON)
+  { uint32_t ONtime = msTime-GPS_ON_ms;
+    if(ONtime>=30000 && GPS_State.DateValid && GPS_State.BurstDone && GPS_TimeErrSqr<16) GPS_OFF(); }
+  else
+  { uint32_t OFFtime = msTime-GPS_OFF_ms;
+    if(OFFtime>=600000) GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+
+  if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS, count idle periods
+                  else { GPS_Idle=0; }                            //
+  if(!GPS_State.PowerON) return;                                  // no further processing when GPS is OFF
+
+  if(GPS_State.BurstDone)                                                // if state is GPS not sending data
+  { if(GPS_Idle<2)                                                       // GPS (re)started sending data
+    { GPS_State.BurstDone=0;                                             // change the state to GPS is sending data
+      uint32_t PPS_ms = msTime-(GPS_State.FixValid?50:30); // -Parameters.PPSdelay;
+      if(GPS_State.TimeValid && GPS_State.DateValid)
+      { int32_t msDiff = PPS_ms-GPS_PPS_ms;
+        int32_t msDiff2 = msDiff*msDiff; GPS_TimeErrSqr += (msDiff2-(int32_t)GPS_TimeErrSqr+2)>>2;
+        Serial.printf("GPS:%+2d (%2d)\n", msDiff, IntSqrt(GPS_TimeErrSqr));
+        if(msDiff>0)
+        { if(msDiff>4) GPS_PPS_ms+=msDiff>>2;
+          else GPS_PPS_ms++; }
+        else if(msDiff<0)
+        { if(msDiff<(-4)) GPS_PPS_ms+=(msDiff+3)>>2;
+          else GPS_PPS_ms--; }
+      }
+    }                                      // [ms] record the est. PPS time
   }
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
     { // printf("GPSstop: %ds\n", GPS_PPS_UTC);
-      EndOfGPS();                                              // start the RF slot
-      GPS_Done=1; }
+      EndOfGPS();                                                 // End-Of-GPS data for this UTC second
+      GPS_State.BurstDone=1; }                                    //
   }
 
 }
