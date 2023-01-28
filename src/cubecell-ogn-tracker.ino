@@ -7,6 +7,8 @@
 #include "Arduino.h"
 #include <Wire.h>
 
+#include "innerWdt.h"         // Watch-Dog Timer
+
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
 
@@ -71,7 +73,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.23"
+#define SOFT_NAME "2023.01.28"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -122,11 +124,20 @@ static Air530ZClass GPS;                      // GPS
 // There is as well the mode-pin of the GPS GPIO1 but it is not clear what it actually does
 // ===============================================================================================
 
+
 #ifdef WITH_BME280                               // this works strictly for BME280, although could possibly be backward compatible to BMP280
 static Adafruit_BME280 BME280;                   // pressure/temperature/humidity sensor
+static uint8_t BME280_Addr = 0x00;
+
+static void BME280_Init(void)
+{ for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
+  { if(BME280.begin(0x76, &Wire)) { BME280_Addr=Addr; break; } // BME280 on the I2C
+    Serial.printf("BME280 not detected at 0x%02X\n", Addr); }
+}
 
 static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
-{ float Temp  = BME280.readTemperature();        // [degC]
+{ if(BME280_Addr==0) return;
+  float Temp  = BME280.readTemperature();        // [degC]
   GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
   float Press = BME280.readPressure();           // [Pa]
   GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
@@ -139,9 +150,17 @@ static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperatur
 
 #ifdef WITH_BMP280                               // this works strictly for BMP280
 static Adafruit_BMP280 BMP280(&Wire);            // pressure/temperature/humidity sensor
+static uint8_t BMP280_Addr = 0x00;
+
+static void BMP280_Init(void)
+{ for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
+  { if(BMP280.begin(0x76, &Wire)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
+    Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
+}
 
 static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
-{ float Temp  = BMP280.readTemperature();        // [degC]
+{ if(BMP280_Addr==0) return;
+  float Temp  = BMP280.readTemperature();        // [degC]
   GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
   float Press = BMP280.readPressure();           // [Pa]
   GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
@@ -387,6 +406,7 @@ static int GPS_Process(void)                           // process serial data st
 
 static void GPS_Next(void)                             // step to the next GPS position
 { int Next = GPS_Ptr^1;
+  // Serial.printf("GPS_Next[%d]\n", GPS_Ptr);
   if(GPS_Pipe[GPS_Ptr].isValid() && GPS_Pipe[Next].isValid()) GPS_Pipe[GPS_Ptr].calcDifferentials(GPS_Pipe[Next]);
   GPS_Ptr=Next; }
 
@@ -413,12 +433,14 @@ static uint8_t OLED_isON=0;
 static void OLED_ON(void)
 { if(OLED_isON) return;
   // Serial.println("OLED: ON");
-  Display.init(); OLED_isON=1; }
+  Display.wakeup();
+  OLED_isON=1; }
 
 static void OLED_OFF(void)
 { if(!OLED_isON) return;
   // Serial.println("OLED: OFF");
-  Display.stop(); OLED_isON=0; }
+  Display.sleep();
+  OLED_isON=0; }
 
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
@@ -510,7 +532,8 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
   Display.display(); }
 
 static void OLED_GPS(const GPS_Position &GPS)                 // display time, date and GPS data/status
-{ Display.clear();
+{ // Serial.println("OLED1");
+  Display.clear();
   Display.setFont(ArialMT_Plain_16);
   if(GPS.isTimeValid())
   { uint8_t Len = GPS.FormatDate(Line, '.'); }
@@ -566,7 +589,10 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
-  Display.display(); }
+  // Serial.println("OLED2");
+  Display.display();
+  // Serial.println("OLED3");
+}
 
 static void OLED_RF(void)                 // display RF-related data
 { Display.clear();
@@ -808,7 +834,7 @@ static int RxTime(int msTime, int msTxTime=(-1))
                                             // if zero then the sub-slot is over
 
 static void Radio_Receive(int msTime)
-{ // Radio.Rx(msWait);
+{ // Radio.Rx(msTime);
   Radio.RxBoosted(msTime);                  // higher sensitivity reception but 2mA more current
   // CY_PM_WFI;                              // go to sleep and wake up on an interrupt
 }
@@ -873,7 +899,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
 { RF_RxPackets++;
   uint32_t msTime = millis()-RF_Slot_PPS;                              // [ms] relative to PPS
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
-  // Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
+  Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(Size!=2*26) { /* CY_PM_WFI; */ return; }                                // for now, only treat OGN packets
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
   SX126xGetPacketStatus(&RadioPktStatus);
@@ -974,6 +1000,7 @@ static void Sleep(void)                            // shut-down all hardware and
   LED_OFF();                                       // stop RGB LED
   delay(500);
   OLED_OFF();                                      // stop OLED
+  Display.stop();
   Wire.end();                                      // stop I2C
   Serial.end();                                    // stop console UART
   pinMode(Vext, ANALOG);
@@ -1029,6 +1056,9 @@ static void Button_ChangeInt(void)  // called by hardware interrupt on button pu
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
 
+  innerWdtEnable(true);                    // turn on the WDT, can be feed by feedInnerWdt(), has 2.4ssec timeout
+                                           // but how to turn it off when going to deep for power-off ?
+
   Random.Word ^= getUniqueID();
 
   VextON();                               // Turn on power to OLED (and possibly other external devices)
@@ -1064,20 +1094,16 @@ void setup()
   // Pixels.setPixelColor( 0, 255, 0, 0, 0); // Green
   // Pixels.show();
 
-  OLED_ON();
-  // Display.init();                                     // Start the OLED
-  // OLED_isON=1;
+  // OLED_ON();
+  Display.init();                                     // Start the OLED
+  OLED_isON=1;
   OLED_Logo();
 
 #ifdef WITH_BME280
-  for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
-  { if(BME280.begin(0x76, &Wire)) break;                        // BME280 on the I2C
-    Serial.printf("BME280 not detected at 0x%02X\n", Addr); }
+  BME280_Init();
 #endif
 #ifdef WITH_BMP280
-  for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
-  { if(BMP280.begin(0x76)) break;                               // BMP280 on the I2C
-    Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
+  BMP280_Init();
 #endif
 
   GPS_ON();                                             // Turn ON the GPS
@@ -1125,17 +1151,18 @@ static void EndOfGPS(void)                                 // after the GPS comp
   if(RxRssiCount)
   { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
   XorShift64(Random.Word);
-  GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
-  GPS_Satellites = GPS.Satellites;
+  GPS_Position &GPS   = GPS_Pipe[GPS_Ptr];
+  GPS_Satellites      = GPS.Satellites;
   GPS_State.TimeValid = GPS.isTimeValid();
   GPS_State.DateValid = GPS.isDateValid();
-  GPS_State.FixValid = GPS.isValid();
+  GPS_State.FixValid  = GPS.isValid();
   if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
                                            else  { LED_Yellow(); }
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
+  // Serial.println("EoG1");
   if(GPS_State.FixValid)                                           // if position is valid
   { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
     GPS_Latitude  = GPS.Latitude;
@@ -1161,13 +1188,17 @@ static void EndOfGPS(void)                                 // after the GPS comp
     ADSL_TxSlot = Random.GPS&0x20;
 #endif
     TxPos=1; }
+  // Serial.println("EoG2");
   CONS_Proc();
   ReadBatteryVoltage();
+  // Serial.println("EoG2a");
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
+  // Serial.println("EoG2b");
   CONS_Proc();
   RF_TxPkt[0]=RF_TxPkt[1]=0;
   if(TxPos) RF_TxPkt[0] = RF_TxPkt[1] = &TxPosPacket;
+  // Serial.println("EoG3");
   static uint8_t InfoTxBackOff=0;
   static uint8_t InfoToggle=0;
   if(InfoTxBackOff) InfoTxBackOff--;
@@ -1176,6 +1207,7 @@ static void EndOfGPS(void)                                 // after the GPS comp
     int Ret=0;
     if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
     if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);   // if not any then prepare a status packet
+    // Serial.println("EoG3a");
     if(Ret>0)
     { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
       if(Random.RX&0x10) RF_TxPkt[1] = &TxInfoPacket;                // put it randomly into 1st or 2nd time slot
@@ -1183,6 +1215,7 @@ static void EndOfGPS(void)                                 // after the GPS comp
       InfoTxBackOff = 15 + (Random.RX%3);
     }
   }
+  // Serial.println("EoG4");
   XorShift64(Random.Word);
   static uint8_t RelayTxBackOff=0;
   if(RelayTxBackOff) RelayTxBackOff--;
@@ -1190,6 +1223,7 @@ static void EndOfGPS(void)                                 // after the GPS comp
   { if(Random.RX&0x20) RF_TxPkt[1] = &TxRelPacket;
                   else RF_TxPkt[0] = &TxRelPacket;
     RelayTxBackOff = Random.RX%3; }
+  // Serial.println("EoG5");
   GPS_Next();
   XorShift64(Random.Word);
 #ifdef WITH_DIG_SIGN
@@ -1217,7 +1251,7 @@ void loop()
   DebugPin_ON(1);                                                 // for debug: to watch the sleep time on the scope
 #endif
 
-  CY_PM_WFI; //  __WFI();                                         // sleep and wake up on an interrupt
+  CY_PM_WFI; //  CySysPmSleep(); or __WFI();                      // sleep and wake up on an interrupt
 
 #ifdef WITH_DEBUGPIN
   DebugPin_ON(0);
@@ -1235,15 +1269,18 @@ void loop()
   uint32_t msDiff = msTime-GPS_PPS_ms;
 
   if(msDiff>=1000)                                                 // track the PPS
-  { if(msDiff<1100) Serial.println("GPS:PPS");
+  { // if(msDiff<1100) Serial.println("GPS:PPS");
     GPS_PPS_UTC++; GPS_PPS_ms+=1000; }
 
   if(GPS_State.PowerON)
   { uint32_t ONtime = msTime-GPS_ON_ms;
-    if(ONtime>=30000 && GPS_State.DateValid && GPS_State.BurstDone && GPS_TimeErrSqr<16) GPS_OFF(); }
+    if(ONtime>=30000 && GPS_State.DateValid && GPS_State.BurstDone && GPS_TimeErrSqr<16)
+    { GPS_OFF(); }
+  }
   else
   { uint32_t OFFtime = msTime-GPS_OFF_ms;
-    if(OFFtime>=600000) GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+    if(OFFtime>=600000) { GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+  }
 
   if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS, count idle periods
                   else { GPS_Idle=0; }                            //
