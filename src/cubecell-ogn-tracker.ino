@@ -40,6 +40,12 @@
 #include "rfm.h"
 
 // ===============================================================================================
+
+template <class Type>
+ void Swap(Type &A, Type &B)
+{ Type M=A; A=B; B=M; }
+
+// ===============================================================================================
 // #define WITH_DIG_SIGN
 
 #ifdef WITH_DIG_SIGN
@@ -340,12 +346,13 @@ static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract sat
 // ===============================================================================================
 // Process GPS position data
 
-static int          GPS_Ptr = 0;       // 
+static int          GPS_Ptr = 0;       //
 static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
+static uint32_t GPS_ValidUTC = 0;      // [sec]        when the last position of the GPS was recorded
 static uint32_t GPS_Latitude;          // [1/60000deg]
 static uint32_t GPS_Longitude;         // [1/60000deg]
-static  int32_t GPS_Altitude;          // [0.1m]
+static  int32_t GPS_Altitude = 0;      // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
@@ -364,6 +371,7 @@ static union
     bool TimeValid :1;                                 // time is valid
     bool DateValid :1;                                 // date is valid
     bool  FixValid :1;                                 // time/position fix is valid
+    bool SlotDone  :1;
   } ;
 } GPS_State = { 0 };                                   // single bit state flags
 
@@ -836,7 +844,6 @@ static int RxTime(int msTime, int msTxTime=(-1))
 static void Radio_Receive(int msTime)
 { // Radio.Rx(msTime);
   Radio.RxBoosted(msTime);                  // higher sensitivity reception but 2mA more current
-  // CY_PM_WFI;                              // go to sleep and wake up on an interrupt
 }
 
 static void Radio_TxDone(void)              // end-of-transmission interrupt
@@ -857,7 +864,9 @@ static void Radio_TxTimeout(void)
           else Radio_NewSubSlot(); }
 
 static void Radio_NewSlot(void)
-{ RF_Slot_UTC=GPS_PPS_UTC;
+{ uint32_t msTime = millis()-GPS_PPS_ms;
+  if(msTime>=1000) { GPS_PPS_ms+=1000; GPS_PPS_UTC++; }
+  RF_Slot_UTC=GPS_PPS_UTC;
   RF_Slot_PPS=GPS_PPS_ms;
   XorShift64(Random.Word);
   RF_TxTime[0]=0; RF_TxTime[1]=0;
@@ -891,7 +900,8 @@ static void Radio_RxTimeout(void)                  // end-of-receive-period inte
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
   // Serial.printf("RxTout: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(msWait<=0 && RF_TxTime[RF_SubSlot])
-  { Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; /* CY_PM_WFI; */ }
+  { OGN_TxConfig();
+    Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; }
   else Radio_NewSubSlot(); }
 
 // a new packet has been received callback - this should probably be a quick call
@@ -900,7 +910,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   uint32_t msTime = millis()-RF_Slot_PPS;                              // [ms] relative to PPS
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
   Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
-  if(Size!=2*26) { /* CY_PM_WFI; */ return; }                                // for now, only treat OGN packets
+  if(Size!=2*26) return;                                // for now, only treat OGN packets
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
   SX126xGetPacketStatus(&RadioPktStatus);
   RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;                           // [dBm] RSSI
@@ -921,7 +931,8 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word);     // update random number
   if(msWait>0) Radio_Receive(msWait);
   else if(RF_TxTime[RF_SubSlot])
-  { Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; /* CY_PM_WFI; */ }
+  { OGN_TxConfig();
+    Radio.Send(RF_TxPktData[RF_SubSlot], 2*26); RF_TxTime[RF_SubSlot]=0; }
   else Radio_NewSubSlot(); }
 
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
@@ -1141,10 +1152,44 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
-// static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
-
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
+
+static void NoGPS(void)
+{
+  // Serial.printf("NoGPS [%d]\n", RxRssiCount);
+  XorShift64(Random.Word);
+  GPS_Position &GPS   = GPS_Pipe[GPS_Ptr];
+  RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
+  RF_RxPackets=0;                                                       // clear the received packet count
+  CleanRelayQueue(GPS_PPS_UTC);
+  ReadBatteryVoltage();
+  CONS_Proc();
+  OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
+  CONS_Proc();
+  XorShift64(Random.Word);
+
+  RF_TxPkt[0]=0; RF_TxPkt[1]=0;
+  static uint8_t InfoTxBackOff=0;
+  static uint8_t InfoToggle=0;
+  int Info=0;
+  if(InfoTxBackOff) InfoTxBackOff--;
+  else
+  { InfoToggle = !InfoToggle;
+    if(InfoToggle) Info=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
+    if(Info<=0) Info=getStatusPacket(TxInfoPacket.Packet, GPS);   // if not any then prepare a status packet
+    if(Info>0)
+    { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
+      InfoTxBackOff = 15 + (Random.RX%3);
+    }
+  }
+  if(Info>0) RF_TxPkt[1] = &TxInfoPacket;
+  else if(GetRelayPacket(&TxInfoPacket))
+  { RF_TxPkt[1] = &TxInfoPacket; }
+  if(GetRelayPacket(&TxRelPacket))
+  { RF_TxPkt[0] = &TxRelPacket; }
+  if(Random.RX&0x10) Swap(RF_TxPkt[0], RF_TxPkt[1]);
+}
 
 static void EndOfGPS(void)                                 // after the GPS completes sending data
 { // Serial.printf("EoGPS [%d]\n", RxRssiCount);
@@ -1162,9 +1207,9 @@ static void EndOfGPS(void)                                 // after the GPS comp
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
-  // Serial.println("EoG1");
   if(GPS_State.FixValid)                                           // if position is valid
-  { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
+  { GPS_ValidUTC  = GPS.getUnixTime();
+    GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
     GPS_Latitude  = GPS.Latitude;
     GPS_Longitude = GPS.Longitude;
     GPS_GeoidSepar= GPS.GeoidSeparation;
@@ -1188,17 +1233,13 @@ static void EndOfGPS(void)                                 // after the GPS comp
     ADSL_TxSlot = Random.GPS&0x20;
 #endif
     TxPos=1; }
-  // Serial.println("EoG2");
   CONS_Proc();
   ReadBatteryVoltage();
-  // Serial.println("EoG2a");
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
-  // Serial.println("EoG2b");
   CONS_Proc();
   RF_TxPkt[0]=RF_TxPkt[1]=0;
   if(TxPos) RF_TxPkt[0] = RF_TxPkt[1] = &TxPosPacket;
-  // Serial.println("EoG3");
   static uint8_t InfoTxBackOff=0;
   static uint8_t InfoToggle=0;
   if(InfoTxBackOff) InfoTxBackOff--;
@@ -1207,7 +1248,6 @@ static void EndOfGPS(void)                                 // after the GPS comp
     int Ret=0;
     if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
     if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);   // if not any then prepare a status packet
-    // Serial.println("EoG3a");
     if(Ret>0)
     { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
       if(Random.RX&0x10) RF_TxPkt[1] = &TxInfoPacket;                // put it randomly into 1st or 2nd time slot
@@ -1215,7 +1255,6 @@ static void EndOfGPS(void)                                 // after the GPS comp
       InfoTxBackOff = 15 + (Random.RX%3);
     }
   }
-  // Serial.println("EoG4");
   XorShift64(Random.Word);
   static uint8_t RelayTxBackOff=0;
   if(RelayTxBackOff) RelayTxBackOff--;
@@ -1223,7 +1262,6 @@ static void EndOfGPS(void)                                 // after the GPS comp
   { if(Random.RX&0x20) RF_TxPkt[1] = &TxRelPacket;
                   else RF_TxPkt[0] = &TxRelPacket;
     RelayTxBackOff = Random.RX%3; }
-  // Serial.println("EoG5");
   GPS_Next();
   XorShift64(Random.Word);
 #ifdef WITH_DIG_SIGN
@@ -1269,22 +1307,38 @@ void loop()
   uint32_t msDiff = msTime-GPS_PPS_ms;
 
   if(msDiff>=1000)                                                 // track the PPS
-  { // if(msDiff<1100) Serial.println("GPS:PPS");
+  { GPS_State.SlotDone=0;
+    // if(msDiff<1100) Serial.println("GPS:PPS");
     GPS_PPS_UTC++; GPS_PPS_ms+=1000; }
 
-  if(GPS_State.PowerON)
-  { uint32_t ONtime = msTime-GPS_ON_ms;
-    if(ONtime>=30000 && GPS_State.DateValid && GPS_State.BurstDone && GPS_TimeErrSqr<16)
-    { GPS_OFF(); }
-  }
-  else
-  { uint32_t OFFtime = msTime-GPS_OFF_ms;
-    if(OFFtime>=600000) { GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+  if(Parameters.AcftType==0xF)                                      // for fixed-object types
+  { bool PosReq = (GPS_ValidUTC==0) || ((GPS_PPS_UTC-GPS_ValidUTC)>=12*3600); // we need position, not jest time
+    if(GPS_State.PowerON)
+    { uint32_t ONtime = msTime-GPS_ON_ms;                            // [ms] for how long the GPS was ON
+      uint32_t MaxONtime = 60000; if(PosReq) MaxONtime=300000;       // [ms]
+      uint32_t MinONtime = 20000;
+      if(ONtime>=MinONtime && (PosReq?GPS_State.FixValid:GPS_State.DateValid) && GPS_State.BurstDone && GPS_TimeErrSqr<8)
+      { GPS_OFF(); }
+      else if(ONtime>MaxONtime)
+      { GPS_OFF(); }
+    }
+    else
+    { uint32_t OFFtime = msTime-GPS_OFF_ms;                          // [ms] for how long the GPS was OFF
+      if(OFFtime>=600000) { GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+    }
   }
 
   if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS, count idle periods
                   else { GPS_Idle=0; }                            //
-  if(!GPS_State.PowerON) return;                                  // no further processing when GPS is OFF
+
+  if(!GPS_State.PowerON)                                          // when GPS is OFF
+  { if(!GPS_State.SlotDone)
+    { uint32_t msDiff = msTime-GPS_PPS_ms;
+      if(msDiff>=150)
+      { NoGPS();
+        GPS_State.SlotDone=1; }
+    }
+    return; }
 
   if(GPS_State.BurstDone)                                                // if state is GPS not sending data
   { if(GPS_Idle<2)                                                       // GPS (re)started sending data
@@ -1292,7 +1346,7 @@ void loop()
       uint32_t PPS_ms = msTime-(GPS_State.FixValid?50:30); // -Parameters.PPSdelay;
       if(GPS_State.TimeValid && GPS_State.DateValid)
       { int32_t msDiff = PPS_ms-GPS_PPS_ms;
-        int32_t msDiff2 = msDiff*msDiff; GPS_TimeErrSqr += (msDiff2-(int32_t)GPS_TimeErrSqr+2)>>2;
+        int32_t msDiffSqr = msDiff*msDiff; GPS_TimeErrSqr += (msDiffSqr-(int32_t)GPS_TimeErrSqr+2)>>2;
         Serial.printf("GPS:%+2d (%2d)\n", msDiff, IntSqrt(GPS_TimeErrSqr));
         if(msDiff>0)
         { if(msDiff>4) GPS_PPS_ms+=msDiff>>2;
