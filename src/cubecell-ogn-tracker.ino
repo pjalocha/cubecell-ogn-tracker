@@ -1,5 +1,6 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
+// the following options do not work correctly yet in this code
 // #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
@@ -344,22 +345,73 @@ static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract sat
 }
 
 // ===============================================================================================
+
+class TimeSync
+{ public:
+   uint32_t PPS_UTC;          // [sec] UTC time of the PPS
+   uint32_t PPS_ms;           // [ms]  system time of the PPS
+   uint32_t ErrSqr;           // [ms^2] est. error square on the system time
+    int16_t TimeErr;          // [ppm]
+   uint16_t ErrCorr;
+
+  public:
+
+   void Print(void) const
+   { printf("TimeSync: %ds %d(%d)ms\n", PPS_UTC, PPS_ms, IntSqrt(ErrSqr)); }
+
+   int32_t msPPS(void) const { return msPPS(millis()); }          // [ms] current system time from PPS
+   int32_t msPPS(uint32_t Sys_ms) const { return Sys_ms-PPS_ms; } // [ms] from PPS
+
+   void Incr(void) { PPS_ms+=1000; PPS_UTC++; }
+   void Decr(void) { PPS_UTC--; PPS_ms-=1000; }
+
+   int NormStep(uint32_t Sys_ms, int32_t MaxDiff=1000)
+   { int32_t msDiff=msPPS(Sys_ms);
+     if(msDiff>=MaxDiff) { Incr(); return 1; }
+     if(msDiff<0) { Decr(); return -1; }
+     return 0; }
+
+   int32_t TrackErr(int32_t msDiff)
+   { int32_t msDiffSqr = msDiff*msDiff; ErrSqr += (msDiffSqr-(int32_t)ErrSqr+2)>>2;
+     // Serial.printf("Sync:%+2d (%2d)\n", msDiff, IntSqrt(ErrSqr));
+     if(msDiff>0)
+     { if(msDiff>4) PPS_ms+=msDiff>>2;
+       else PPS_ms++; }
+     else if(msDiff<0)
+     { if(msDiff<(-4)) PPS_ms+=(msDiff+3)>>2;
+       else PPS_ms--; }
+     return msDiff; }
+
+   bool calcTimeErr(const TimeSync &RefSync)
+   { uint32_t secDiff = PPS_UTC-RefSync.PPS_UTC;
+     if(secDiff<300 || secDiff>2*86400) return 0;
+     uint32_t msDiff = PPS_ms-RefSync.PPS_ms;
+     uint32_t Sec = (msDiff+500)/1000;
+     // Serial.printf("TimeErr: %d - %d [s] %d [ms]\n", PPS_UTC, RefSync.PPS_UTC, msDiff);
+     if(Sec!=secDiff) return 0;
+      int32_t Err = msDiff-Sec*1000;
+     TimeErr = Err*1000/Sec;
+     Serial.printf("TimeErr: %dms / %ds = %+dppm\n", Err, Sec, TimeErr);
+     return 1; }
+
+} ;
+
+// ===============================================================================================
 // Process GPS position data
 
 static int          GPS_Ptr = 0;       //
 static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
 static uint32_t GPS_ValidUTC = 0;      // [sec]        when the last position of the GPS was recorded
-static uint32_t GPS_Latitude;          // [1/60000deg]
-static uint32_t GPS_Longitude;         // [1/60000deg]
+static uint32_t GPS_Latitude = 0;      // [1/60000deg]
+static uint32_t GPS_Longitude = 0;     // [1/60000deg]
 static  int32_t GPS_Altitude = 0;      // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
 
-static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
-static uint32_t GPS_TimeErrSqr = 0;                    // [ms^2] average square error on GPS_PPS_ms
-static uint32_t GPS_PPS_UTC = 0;                       // [sec] Unix time which corresponds to the most recent PPS
+static TimeSync GPS_TimeSync;                          // sync. to the GPS+PPS
+static TimeSync GPS_PrevTimeSync;                      // previous recorded sync. as to calc. the frequency error
 
 static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
 
@@ -378,17 +430,20 @@ static union
 static uint32_t GPS_ON_ms = 0;                         // [ms] when GPS was turned ON
 static uint32_t GPS_OFF_ms = 0;                        // [ms] when GPS was turned OFF
 
-static void GPS_ON(void)
+static void GPS_ON(void)                               // Turn the GPS ON
 { if(GPS_State.PowerON) return;
   GPS_ON_ms = millis();
   GPS.begin(115200);
   GPS_State.Flags=0;
   GPS_State.PowerON=1; }
 
-static void GPS_OFF(void)
+static void GPS_OFF(void)                              // Turn the GPS OFF
 { if(!GPS_State.PowerON) return;
   GPS_OFF_ms = millis();
   GPS.end();
+  GPS_TimeSync.Print();
+  GPS_TimeSync.calcTimeErr(GPS_PrevTimeSync);
+  GPS_PrevTimeSync=GPS_TimeSync;
   GPS_State.Flags=0; }
 
 static NMEA_RxMsg GpsNMEA;                             // NMEA catcher for GPS
@@ -567,6 +622,7 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Line[Len++]='m'; Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 16, Line); }
+  if(GPS_State.PowerON)
   { uint8_t Len=0;
     if(GPS.Sec&1)
     { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, GPS.Satellites);
@@ -578,19 +634,10 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 32, Line); }
+  else                      // when GPS is powered OFF
+  { Display.setTextAlignment(TEXT_ALIGN_RIGHT);
+    Display.drawString(128, 32, "GPS OFF"); }
   { uint8_t Len=0;
-/*
-    if(GPS.Sec&1)
-    { Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
-      Len+=Format_String(Line+Len, "/min"); }
-    else
-    { Len+=Format_SignDec(Line+Len, RX_RSSI.getOutput()*5, 2, 1);
-      Len+=Format_String(Line+Len, "dBm"); }
-    Line[Len]=0;
-    Display.setTextAlignment(TEXT_ALIGN_LEFT);
-    Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
-    Len=0;
-*/
     if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
     else
     { Len+=Format_UnsDec(Line+Len, BattCapacity); Line[Len++]= '%'; }
@@ -808,8 +855,9 @@ static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96,
 // ADS-L SYNC:       0xF5724B18 encoded in Manchester (fixed packet length 0x18 is included)
 static const uint8_t ADSL_SYNC[10] = { 0x55, 0x99, 0x95, 0xA6, 0x9A, 0x65, 0xA9, 0x6A, 0x00, 0x00 };
 
-static uint32_t RF_Slot_UTC = 0;      // [sec] UTC time of the current radio slot
-static uint32_t RF_Slot_PPS = 0;      // [ms]  system time of the PPS of the Slot_UTC
+// static uint32_t RF_Slot_UTC = 0;      // [sec] UTC time of the current radio slot
+// static uint32_t RF_Slot_PPS = 0;      // [ms]  system time of the PPS of the Slot_UTC
+static TimeSync RF_TimeSync;
 static bool     RF_SubSlot  = 0;      // 0 = first TX/RX sub-slot: 0.4-0.8sec 1 = second TX/RX sub-slot: 0.8-1.2sec
 static uint8_t  RF_Channel  = 0;      // hopping channel, in Europe/Africa 0 or 1, more channels in Australia, South America and USA/Canada
 
@@ -848,15 +896,15 @@ static void Radio_Receive(int msTime)
 
 static void Radio_TxDone(void)              // end-of-transmission interrupt
 { RF_TxPackets++;
-  uint32_t msTime = millis()-RF_Slot_PPS;   // [ms] relative to the PPS of this RF slot
+  int32_t msTime = RF_TimeSync.msPPS();
   int msWait=RxTime(msTime);
-  // Serial.printf("TxDone: %4d:%3d\n", msTime, msWait);
+  //Serial.printf("TxDone: %4d:%3d\n", msTime, msWait);
   OGN_RxConfig();
   if(msWait>5) Radio_Receive(msWait);
           else Radio_NewSubSlot(); }         //
 
 static void Radio_TxTimeout(void)
-{ uint32_t msTime = millis()-RF_Slot_PPS;    // [ms] relative to PPS
+{ int32_t msTime = RF_TimeSync.msPPS();
   int msWait=RxTime(msTime);
   // Serial.printf("TxTout: %4d:%3d\n", msTime, msWait);
   OGN_RxConfig();
@@ -864,10 +912,10 @@ static void Radio_TxTimeout(void)
           else Radio_NewSubSlot(); }
 
 static void Radio_NewSlot(void)
-{ uint32_t msTime = millis()-GPS_PPS_ms;
-  if(msTime>=1000) { GPS_PPS_ms+=1000; GPS_PPS_UTC++; }
-  RF_Slot_UTC=GPS_PPS_UTC;
-  RF_Slot_PPS=GPS_PPS_ms;
+{ int32_t msTime = RF_TimeSync.msPPS();
+  // printf("RFslot: %d\n", msTime);
+  GPS_TimeSync.NormStep(millis(), 1000);
+  RF_TimeSync = GPS_TimeSync;
   XorShift64(Random.Word);
   RF_TxTime[0]=0; RF_TxTime[1]=0;
   if(RF_TxPkt[0])                                     // copy Slot0 packet to be transmitted
@@ -878,17 +926,18 @@ static void Radio_NewSlot(void)
   { Manchester(RF_TxPktData[1], RF_TxPkt[1]->Packet.Byte(), RF_TxPkt[1]->Bytes);
     RF_TxTime[1] = Random.GPS % 389 +  5;
     RF_TxPkt[1] = 0; }
-  // printf("RFslot: %d %3d:%3d\n", RF_Slot_UTC, RF_TxTime[0], RF_TxTime[1]);
+  // printf("RFslot: %d %3d:%3d\n", RF_TimeSync.PPS_UTC, RF_TxTime[0], RF_TxTime[1]);
   RF_SubSlot=0; }
 
 static void Radio_NewSubSlot(void)
 { OGN_TxConfig();                                     // renew the configuration for Tx/Rx just in case
   OGN_RxConfig();
-  uint32_t msTime = millis()-RF_Slot_PPS;
+  int32_t msTime = RF_TimeSync.msPPS();
+  //printf("RFsubSlot: %d\n", msTime);
   if(msTime>=1250 || RF_SubSlot) Radio_NewSlot();                // in case a new slot
                             else RF_SubSlot=1;
-  msTime = millis()-RF_Slot_PPS;
-  RF_Channel=Radio_FreqPlan.getChannel(RF_Slot_UTC, RF_SubSlot, 1); // calc. the channel for this (sub)slot
+  msTime = RF_TimeSync.msPPS();
+  RF_Channel=Radio_FreqPlan.getChannel(RF_TimeSync.PPS_UTC, RF_SubSlot, 1); // calc. the channel for this (sub)slot
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));    // set the radio to the channel frequency
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);                 // time to listen (before possible transmission)
   // printf("RFsubSlot: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
@@ -896,7 +945,7 @@ static void Radio_NewSubSlot(void)
   Radio_Receive(msWait); }                           // go to receive mode
 
 static void Radio_RxTimeout(void)                  // end-of-receive-period interrupt
-{ uint32_t msTime = millis()-RF_Slot_PPS;
+{ int32_t msTime = RF_TimeSync.msPPS();
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
   // Serial.printf("RxTout: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(msWait<=0 && RF_TxTime[RF_SubSlot])
@@ -907,15 +956,15 @@ static void Radio_RxTimeout(void)                  // end-of-receive-period inte
 // a new packet has been received callback - this should probably be a quick call
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
 { RF_RxPackets++;
-  uint32_t msTime = millis()-RF_Slot_PPS;                              // [ms] relative to PPS
+  int32_t msTime = RF_TimeSync.msPPS();
   int msWait=RxTime(msTime, RF_TxTime[RF_SubSlot]);
-  Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
+  // Serial.printf("RxDone: %4d:%3d S%d C%d\n", msTime, msWait, RF_SubSlot, RF_Channel);
   if(Size!=2*26) return;                                // for now, only treat OGN packets
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
   SX126xGetPacketStatus(&RadioPktStatus);
   RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;                           // [dBm] RSSI
   RFM_FSK_RxPktData *RxPkt = RxFIFO.getWrite();                        // new packet in the RxFIFO
-  RxPkt->Time = RF_Slot_UTC;                                           // [sec]
+  RxPkt->Time = RF_TimeSync.PPS_UTC;                                   // [sec]
   RxPkt->msTime = msTime;                                              // [ms] time since PPS
   RxPkt->Channel = 0x80 | RF_Channel;                                  // system:channel
   RxPkt->RSSI = -2*RSSI;                                               // [-0.5dBm]
@@ -1156,13 +1205,14 @@ static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
 
 static void NoGPS(void)
-{
+{ GPS_Pipe[GPS_Ptr] = GPS_Pipe[GPS_Ptr^1];
+  GPS_Pipe[GPS_Ptr].setUnixTime(GPS_TimeSync.PPS_UTC);
   // Serial.printf("NoGPS [%d]\n", RxRssiCount);
   XorShift64(Random.Word);
   GPS_Position &GPS   = GPS_Pipe[GPS_Ptr];
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
-  CleanRelayQueue(GPS_PPS_UTC);
+  CleanRelayQueue(GPS_TimeSync.PPS_UTC);
   ReadBatteryVoltage();
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
@@ -1189,7 +1239,8 @@ static void NoGPS(void)
   if(GetRelayPacket(&TxRelPacket))
   { RF_TxPkt[0] = &TxRelPacket; }
   if(Random.RX&0x10) Swap(RF_TxPkt[0], RF_TxPkt[1]);
-}
+
+  GPS_Ptr^=1; }
 
 static void EndOfGPS(void)                                 // after the GPS completes sending data
 { // Serial.printf("EoGPS [%d]\n", RxRssiCount);
@@ -1201,11 +1252,11 @@ static void EndOfGPS(void)                                 // after the GPS comp
   GPS_State.TimeValid = GPS.isTimeValid();
   GPS_State.DateValid = GPS.isDateValid();
   GPS_State.FixValid  = GPS.isValid();
-  if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
+  if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_TimeSync.PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
                                            else  { LED_Yellow(); }
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
-  CleanRelayQueue(GPS_PPS_UTC);
+  CleanRelayQueue(GPS_TimeSync.PPS_UTC);
   bool TxPos=0;
   if(GPS_State.FixValid)                                           // if position is valid
   { GPS_ValidUTC  = GPS.getUnixTime();
@@ -1220,7 +1271,7 @@ static void EndOfGPS(void)                                 // after the GPS comp
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
-    { SignKey.Hash(GPS_PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
+    { SignKey.Hash(GPS_TimeSync.PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
       SignTxPkt = &TxPosPacket; }
 #endif
     TxPosPacket.Packet.Whiten();
@@ -1304,20 +1355,21 @@ void loop()
 
 // RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++;             // [0.5dBm] this part we need to do in the Radio thread
   uint32_t msTime = millis();
-  uint32_t msDiff = msTime-GPS_PPS_ms;
+  uint32_t msDiff = GPS_TimeSync.msPPS(msTime);
 
   if(msDiff>=1000)                                                 // track the PPS
   { GPS_State.SlotDone=0;
     // if(msDiff<1100) Serial.println("GPS:PPS");
-    GPS_PPS_UTC++; GPS_PPS_ms+=1000; }
+    // GPS_PPS_UTC++; GPS_PPS_ms+=1000;
+    GPS_TimeSync.Incr(); }
 
   if(Parameters.AcftType==0xF)                                      // for fixed-object types
-  { bool PosReq = (GPS_ValidUTC==0) || ((GPS_PPS_UTC-GPS_ValidUTC)>=12*3600); // we need position, not jest time
+  { bool PosReq = (GPS_ValidUTC==0) || ((GPS_TimeSync.PPS_UTC-GPS_ValidUTC)>=12*3600); // we need position, not just time
     if(GPS_State.PowerON)
     { uint32_t ONtime = msTime-GPS_ON_ms;                            // [ms] for how long the GPS was ON
       uint32_t MaxONtime = 60000; if(PosReq) MaxONtime=300000;       // [ms]
       uint32_t MinONtime = 20000;
-      if(ONtime>=MinONtime && (PosReq?GPS_State.FixValid:GPS_State.DateValid) && GPS_State.BurstDone && GPS_TimeErrSqr<8)
+      if(ONtime>=MinONtime && (PosReq?GPS_State.FixValid:GPS_State.DateValid) && GPS_State.BurstDone && GPS_TimeSync.ErrSqr<8)
       { GPS_OFF(); }
       else if(ONtime>MaxONtime)
       { GPS_OFF(); }
@@ -1333,7 +1385,7 @@ void loop()
 
   if(!GPS_State.PowerON)                                          // when GPS is OFF
   { if(!GPS_State.SlotDone)
-    { uint32_t msDiff = msTime-GPS_PPS_ms;
+    { uint32_t msDiff = GPS_TimeSync.msPPS(msTime);
       if(msDiff>=150)
       { NoGPS();
         GPS_State.SlotDone=1; }
@@ -1343,19 +1395,11 @@ void loop()
   if(GPS_State.BurstDone)                                                // if state is GPS not sending data
   { if(GPS_Idle<2)                                                       // GPS (re)started sending data
     { GPS_State.BurstDone=0;                                             // change the state to GPS is sending data
-      uint32_t PPS_ms = msTime-(GPS_State.FixValid?50:30); // -Parameters.PPSdelay;
+      uint32_t PPS_ms = msTime-(GPS_State.FixValid?50:30);               // 
       if(GPS_State.TimeValid && GPS_State.DateValid)
-      { int32_t msDiff = PPS_ms-GPS_PPS_ms;
-        int32_t msDiffSqr = msDiff*msDiff; GPS_TimeErrSqr += (msDiffSqr-(int32_t)GPS_TimeErrSqr+2)>>2;
-        Serial.printf("GPS:%+2d (%2d)\n", msDiff, IntSqrt(GPS_TimeErrSqr));
-        if(msDiff>0)
-        { if(msDiff>4) GPS_PPS_ms+=msDiff>>2;
-          else GPS_PPS_ms++; }
-        else if(msDiff<0)
-        { if(msDiff<(-4)) GPS_PPS_ms+=(msDiff+3)>>2;
-          else GPS_PPS_ms--; }
-      }
-    }                                      // [ms] record the est. PPS time
+      { int32_t msDiff = GPS_TimeSync.msPPS(PPS_ms);
+        GPS_TimeSync.TrackErr(msDiff); }
+    }
   }
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
