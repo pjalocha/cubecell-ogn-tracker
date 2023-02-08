@@ -1355,7 +1355,7 @@ class GPS_Position: public GPS_Time
    //  180    0x066FF300      0x80000000   0x7FFFBC00
    static int32_t getFANETcordic(int32_t Coord) { return ((int64_t)Coord*83399317+(1<<21))>>22; } // [0.0001/60 deg] => [FANET cordic]
 
-   void EncodeAirPos(FANET_Packet &Packet, uint8_t AcftType=1, bool Track=1)
+   void EncodeAirPos(FANET_Packet &Packet, uint8_t AcftType=1, bool Track=1) const
    { int32_t Alt = Altitude; if(Alt<0) Alt=0; else Alt=(Alt+5)/10;
      int32_t Lat = getFANETcordic(Latitude);                                     // Latitude:  [0.0001/60deg] => [cordic]
      int32_t Lon = getFANETcordic(Longitude);                                    // Longitude: [0.0001/60deg] => [cordic]

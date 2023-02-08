@@ -1,10 +1,14 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
+// the following options do not work correctly yet in this code
 // #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
-// #define WITH_BME280 // read a pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+// #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+// #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 
 #include "Arduino.h"
 #include <Wire.h>
+
+#include "innerWdt.h"         // Watch-Dog Timer
 
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
@@ -17,7 +21,12 @@
 
 #ifdef WITH_BME280
 #include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>  // pressure sensor
+#include <Adafruit_BME280.h>  // pressure/temperature/humidity sensor
+#endif
+
+#ifdef WITH_BMP280
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>  // pressure/temperature/humidity sensor
 #endif
 
 #include "fifo.h"
@@ -31,6 +40,7 @@
 #include "crc1021.h"
 #include "freqplan.h"
 #include "rfm.h"
+#include "fanet.h"
 
 // ===============================================================================================
 // #define WITH_DIG_SIGN
@@ -39,6 +49,19 @@
 #include "uecc-signkey.h"
 
 static uECC_SignKey SignKey;
+#endif
+
+// ===============================================================================================
+// DEBUG pin
+
+#define WITH_DEBUGPIN
+
+#ifdef WITH_DEBUGPIN
+const int DebugPin = GPIO4; // marked "4" on the board
+
+static void DebugPin_Init(void) { pinMode(DebugPin, OUTPUT); }
+
+static void DebugPin_ON(bool ON=1) { digitalWrite(DebugPin, ON); }
 #endif
 
 // ===============================================================================================
@@ -53,7 +76,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "OGN-CC"
-#define SOFT_NAME "2023.02.04"
+#define SOFT_NAME "2023.02.07"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -86,7 +109,7 @@ static void ReadBatteryVoltage(void)
 // ===============================================================================================
 // GPS: apparently Air530Z is a very different device from Air530, does not look compatible at all
 
-static Air530ZClass GPS;                 // GPS
+static Air530ZClass GPS;                      // GPS
 
 // details not easy to find: https://www.cnblogs.com/luat/p/14667102.html
 // some control NMEA:
@@ -104,8 +127,48 @@ static Air530ZClass GPS;                 // GPS
 // There is as well the mode-pin of the GPS GPIO1 but it is not clear what it actually does
 // ===============================================================================================
 
-#ifdef WITH_BME280
-static Adafruit_BME280 BME280;                // pressure/temperature/humidity sensor
+
+#ifdef WITH_BME280                               // this works strictly for BME280, although could possibly be backward compatible to BMP280
+static Adafruit_BME280 BME280;                   // pressure/temperature/humidity sensor
+static uint8_t BME280_Addr = 0x00;
+
+static void BME280_Init(void)
+{ for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
+  { if(BME280.begin(0x76, &Wire)) { BME280_Addr=Addr; break; } // BME280 on the I2C
+    Serial.printf("BME280 not detected at 0x%02X\n", Addr); }
+}
+
+static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
+{ if(BME280_Addr==0) return;
+  float Temp  = BME280.readTemperature();        // [degC]
+  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  float Press = BME280.readPressure();           // [Pa]
+  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
+  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.hasBaro=1;
+  float Hum   = BME280.readHumidity();           // [%]
+  GPS.Humidity    = floor(Hum*10+0.5);           // [0.1 %]
+  GPS.hasHum=1; }
+#endif
+
+#ifdef WITH_BMP280                               // this works strictly for BMP280
+static Adafruit_BMP280 BMP280(&Wire);            // pressure/temperature/humidity sensor
+static uint8_t BMP280_Addr = 0x00;
+
+static void BMP280_Init(void)
+{ for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
+  { if(BMP280.begin(0x76, &Wire)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
+    Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
+}
+
+static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
+{ if(BMP280_Addr==0) return;
+  float Temp  = BMP280.readTemperature();        // [degC]
+  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  float Press = BMP280.readPressure();           // [Pa]
+  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
+  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.hasBaro=1; }
 #endif
 
 // ===============================================================================================
@@ -176,7 +239,7 @@ int  CONS_UART_Read (uint8_t &Byte)
 
 // ===============================================================================================
 
-static NMEA_RxMsg ConsNMEA;
+static NMEA_RxMsg ConsNMEA;                                     // NMEA catcher for console
 
 static void PrintParameters(void)                               // print parameters stored in Flash
 { Parameters.Print(Line);                                       // single line, most essential parameters
@@ -205,7 +268,8 @@ static void ConsNMEA_Process(void)                              // priocess NMEA
 
 // static void CONS_CtrlB(void) { Serial.printf("Battery: %5.3fV %d%%\n", 0.001*BattVoltage, BattCapacity); }
 
-static void CONS_CtrlC(void) { PrintParameters(); }
+static void CONS_CtrlC(void)
+{ PrintParameters(); }
 
 static void CONS_CtrlR(void)
 { uint8_t Len=Format_String(Line, "Relay: ");
@@ -232,6 +296,7 @@ static int CONS_Proc(void)
       ConsNMEA.Clear(); }
     // printf("CONS_Proc() - after if()\n\r" );
   }
+  if(Count) Button_ForceActive();                                   // if characters received on the console then activate the OLED
   return Count; }
 
 // ===============================================================================================
@@ -341,11 +406,15 @@ static uint8_t OLED_isON=0;
 
 static void OLED_ON(void)
 { if(OLED_isON) return;
-  Display.wakeup(); OLED_isON=1; }
+  // Serial.println("OLED: ON");
+  Display.wakeup();
+  OLED_isON=1; }
 
 static void OLED_OFF(void)
 { if(!OLED_isON) return;
-  Display.sleep(); OLED_isON=0; }
+  // Serial.println("OLED: OFF");
+  Display.sleep();
+  OLED_isON=0; }
 
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
@@ -615,6 +684,11 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.TxPower = TxPower;
   return 1; }
 
+static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS)
+{ Packet.setAddress(Parameters.Address);
+  GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
+  return 1; }
+
 static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
 { Packet.HeaderWord = 0;
   Packet.Header.Address = Parameters.Address;                          // aircraft address
@@ -650,12 +724,12 @@ static uint8_t RF_Channel = 0; // hopping channel
 
 static RadioEvents_t Radio_Events;
 
-static void Radio_TxDone(void)
+static void Radio_TxDone(void)  // when transmission completed
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
-  OGN_RxConfig();
+  OGN_RxConfig();               // refresh the receiver configuration
   Radio.Rx(0); }
 
-static void Radio_TxTimeout(void)
+static void Radio_TxTimeout(void) // this never happens really
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   OGN_RxConfig();
   Radio.Rx(0); }
@@ -704,8 +778,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
     RxPkt->Data[Idx]=(ByteH<<4) | ByteL;
     RxPkt->Err [Idx]=(ErrH <<4) | ErrL ; }
   RxFIFO.Write();                                                      // put packet into the RxFIFO
-  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word);     // update random number
-}
+  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word); }   // update random number
 
 static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
 { RFM_FSK_RxPktData *RxPkt = RxFIFO.getRead();                         // check for new received packets
@@ -744,7 +817,8 @@ static void Radio_RxProcess(void)                                      // proces
 
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
 
-static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // additional RF configuration reuired for OGN/ADS-L to work
+// additional RF configuration reuired for OGN/ADS-L to work
+static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes)
 { SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
   SX126xSetModulationParams(&SX126x.ModulationParams);
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
@@ -754,30 +828,42 @@ static void OGN_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes) // addi
 
 static void OGN_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  OGN_UpdateConfig(OGN1_SYNC, 8); }
+  // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
+  // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
+  Radio_UpdateConfig(OGN1_SYNC, 8); }
 
 static void ADSL_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  OGN_UpdateConfig(ADSL_SYNC, 8); }
+  Radio_UpdateConfig(ADSL_SYNC, 8); }
+
+static void FNT_TxConfig(void)
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          1,    100);
+                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , I/Q-invert, timeout
+}
 
 static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 52, 0, 0, 0, 0, true);
   // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadLen [bytes], CRC [bool],
   // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
-  OGN_UpdateConfig(OGN1_SYNC+1, 7); }
+  Radio_UpdateConfig(OGN1_SYNC+1, 7); }
 
 static void ADSL_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true); // same as OGN just different packet size
-  OGN_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
+  Radio_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
 
-static int Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uint8_t SignLen=68)      // send packet, but first manchester encode it
+// Manchester encode packet data
+static int Manchester(uint8_t *TxData, const uint8_t *PktData, int PktLen)
+{ int TxLen=0;
+  for(int Idx=0; Idx<PktLen; Idx++)
+  { uint8_t Byte=PktData[Idx];
+    TxData[TxLen++]=ManchesterEncode[Byte>>4];                      // software manchester encode every byte
+    TxData[TxLen++]=ManchesterEncode[Byte&0x0F]; }
+  return TxLen; }
+
+// transmit Data with Manchester encoding optionally followed by a signature (without Manchester), setup already assumed done
+static int Transmit(const uint8_t *Data, uint8_t PktLen=26, const uint8_t *Sign=0, uint8_t SignLen=68)
 { static uint8_t TxPacket[2*26+64+4];                                  // buffer to fit manchester encoded packet and the digital signature
-  uint8_t TxLen=0;
-  for(uint8_t Idx=0; Idx<PktLen; Idx++)
-  { uint8_t Byte=Data[Idx];
-    TxPacket[TxLen++]=ManchesterEncode[Byte>>4];                      // software manchester encode every byte
-    TxPacket[TxLen++]=ManchesterEncode[Byte&0x0F];
-  }
+  int TxLen = Manchester(TxPacket, Data, PktLen);
   if(SignLen && Sign)
   { for(uint8_t Idx=0; Idx<SignLen; Idx++)                            // digital signature
     { uint8_t Byte=Sign[Idx];
@@ -786,10 +872,12 @@ static int Transmit(const uint8_t *Data, uint8_t PktLen=26, uint8_t *Sign=0, uin
   Radio.Send(TxPacket, TxLen);
   return TxLen; }
 
+// transmit OGN packet with possible signature
 static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68)
 { OGN_TxConfig();
   return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
+// transmit ADS-L packet with possible signature
 static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
 { ADSL_TxConfig();
   return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
@@ -801,7 +889,7 @@ static void Sleep(void)                            // shut-down all hardware and
   // detachInterrupt(GPIO11);                         // stop GPS PPS interrupt
   OLED_ON();
   OLED_Logo();                                     // display logo (for a short time)
-  GPS.end();                                       // stop GPS
+  GPS.end();                                       // stop the GPS
   detachInterrupt(RADIO_DIO_1);                    // stop Radio interrupt
   Radio.Sleep();                                   // stop Radio
   delay(500);
@@ -812,6 +900,9 @@ static void Sleep(void)                            // shut-down all hardware and
   Serial.end();                                    // stop console UART
   pinMode(Vext, ANALOG);
   pinMode(ADC, ANALOG);
+#ifdef WITH_DEBUGPIN
+  pinMode(DebugPin, ANALOG);
+#endif
   while(1) lowPowerHandler(); }                     // never wake up
 
 /*
@@ -844,7 +935,7 @@ static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell 
 static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
 
 static uint32_t Button_PressTime = 0;
-static uint8_t Button_ShortPush = 0;
+static  uint8_t Button_ShortPush = 0;
 static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
 static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
 
@@ -865,6 +956,9 @@ static void Button_Process(void)                    // process the button push/r
     Button_ShortPush--; }
   Button_PrevSysTime=SysTime; }
 
+static void Button_ForceActive(void)
+{ Button_IdleTime=0; OLED_ON(); }                   // activate the OLED, as if the user pushed the button
+
 static void Button_ChangeInt(void)  // called by hardware interrupt on button push or release
 { if(Button_isPressed())            // pressed
   { Button_PressTime=millis(); }
@@ -882,11 +976,16 @@ static void Button_ChangeInt(void)  // called by hardware interrupt on button pu
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
 
+  innerWdtEnable(true);                    // turn on the WDT, can be feed by feedInnerWdt(), has 2.4ssec timeout
+                                           // but how to turn it off when going to deep for power-off ?
+
   Random.Word ^= getUniqueID();
 
   VextON();                               // Turn on power to OLED (and possibly other external devices)
   delay(100);
-
+#ifdef WITH_DEBUGPIN
+  DebugPin_Init();
+#endif
   ReadBatteryVoltage();
 
   Parameters.ReadFromFlash();             // read parameters from Flash
@@ -921,12 +1020,13 @@ void setup()
   OLED_Logo();
 
 #ifdef WITH_BME280
-  for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
-  { if(BME280.begin(0x76, &Wire)) break;                        // BME280 on the I2C
-    Serial.printf("BME280 not detected at 0x%02X\n", Addr); }
+  BME280_Init();
+#endif
+#ifdef WITH_BMP280
+  BMP280_Init();
 #endif
 
-  GPS.begin(115200);                                 // Start the GPS
+  GPS.begin(115200);
   // pinMode(GPIO11, INPUT);                            // GPS PPS ?
   // attachInterrupt(GPIO11, GPS_HardPPS, RISING);
 
@@ -971,11 +1071,11 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
 static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
-static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1;
-static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;
-
-static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0;
-static bool ADSL_TxSlot=0;
+static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1; // OGN packets to transmit in the 1st and 2nd sub-slot
+static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signature corresponds to
+static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
+static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
+static FANET_Packet TxFNTpacket;            // FANET packet to transmit
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
@@ -1003,6 +1103,7 @@ static void StartRFslot(void)                                     // start the T
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
+    getFNTpacket(TxFNTpacket, GPS);
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
@@ -1123,6 +1224,7 @@ void loop()
     { RF_Slot=1;
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
+      // here we could transmit the FANET packet
       Radio.Rx(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
