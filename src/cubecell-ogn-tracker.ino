@@ -2,6 +2,7 @@
 
 // the following options do not work correctly yet in this code
 // #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+// #define WITH_FANET
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 
@@ -40,7 +41,9 @@
 #include "crc1021.h"
 #include "freqplan.h"
 #include "rfm.h"
+#ifdef WITH_FANET
 #include "fanet.h"
+#endif
 
 // ===============================================================================================
 // #define WITH_DIG_SIGN
@@ -346,9 +349,10 @@ static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract sat
 static int          GPS_Ptr = 0;       // 
 static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
-static uint32_t GPS_Latitude;          // [1/60000deg]
-static uint32_t GPS_Longitude;         // [1/60000deg]
-static  int32_t GPS_Altitude;          // [0.1m]
+static uint32_t GPS_ValidUTC = 0;      // [sec]        when the last position of the GPS was recorded
+static uint32_t GPS_Latitude = 0;      // [1/60000deg]
+static uint32_t GPS_Longitude = 0;     // [1/60000deg]
+static  int32_t GPS_Altitude = 0;      // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
@@ -357,6 +361,18 @@ static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at t
 static uint32_t GPS_PPS_UTC = 0;                      // [sec] Unix time which corresponds to the most recent PPS
 
 static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
+
+static union
+{ uint32_t Flags;
+  struct
+  { bool PowerON   :1;                                 // is turned ON
+    bool BurstDone :1;                                 // data burst is complete
+    bool TimeValid :1;                                 // time is valid
+    bool DateValid :1;                                 // date is valid
+    bool  FixValid :1;                                 // time/position fix is valid
+    bool SlotDone  :1;
+  } ;
+} GPS_State = { 0 };                                   // single bit state flags
 
 static NMEA_RxMsg GpsNMEA;                             // NMEA catcher for GPS
 
@@ -684,10 +700,12 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.TxPower = TxPower;
   return 1; }
 
+#ifdef WITH_FANET
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS)
 { Packet.setAddress(Parameters.Address);
   GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
   return 1; }
+#endif
 
 static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
 { Packet.HeaderWord = 0;
@@ -756,6 +774,10 @@ static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a p
   // PrintRelayQueue(Idx);  // for debug
   RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
+
+static void Radio_RxTimeout(void)                  // end-of-receive-period: not clear what to do here
+{
+}
 
 // a new packet has been received callback - this should probably be a quick call
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
@@ -836,10 +858,13 @@ static void ADSL_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
 
+#ifdef WITH_FANET
 static void FNT_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          1,    100);
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    60);
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , I/Q-invert, timeout
-}
+  static uint8_t FNT_SYNC[8] = { 0xF4, 0x14, 0, 0, 0, 0, 0, 0 } ;
+  SX126xSetSyncWord(FNT_SYNC); }
+#endif
 
 static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 52, 0, 0, 0, 0, true);
@@ -1033,11 +1058,13 @@ void setup()
   // Serial.println("GPS started");
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
 
-  Radio_Events.TxDone    = Radio_TxDone;             // Start the Radio
+  Radio_Events.TxDone    = Radio_TxDone;             // Radio events
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
+  Radio_Events.RxTimeout = Radio_RxTimeout;
   Radio.Init(&Radio_Events);
-  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
+
+  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));  // set on default frequency
   OGN_TxConfig();
   OGN_RxConfig();
   Radio.Rx(0);
@@ -1068,14 +1095,17 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
-static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
+// static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
 static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1; // OGN packets to transmit in the 1st and 2nd sub-slot
 static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signature corresponds to
 static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
 static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
+
+#ifdef WTIH_FANET
 static FANET_Packet TxFNTpacket;            // FANET packet to transmit
+#endif
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
@@ -1087,14 +1117,21 @@ static void StartRFslot(void)                                     // start the T
   XorShift64(Random.Word);
   GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
   GPS_Satellites = GPS.Satellites;
-  if(GPS.isTimeValid() && GPS.isDateValid()) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
-                                       else  { LED_Yellow(); }
+  GPS_State.TimeValid = GPS.isTimeValid();
+  GPS_State.DateValid = GPS.isDateValid();
+  GPS_State.FixValid  = GPS.isValid();
+  if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
+                                           else  { LED_Yellow(); }
   RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
   RX_OGN_Packets=0;                                                           // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
-  if(GPS.isValid())                                           // if position is valid
-  { GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
+#ifdef WTIH_FANET
+  uint32_t FNTfreq=0;
+#endif
+  if(GPS_State.FixValid)                                      // if position is valid
+  { GPS_ValidUTC  = GPS.getUnixTime();
+    GPS_Altitude  = GPS.Altitude;                             // set global GPS variables
     GPS_Latitude  = GPS.Latitude;
     GPS_Longitude = GPS.Longitude;
     GPS_GeoidSepar= GPS.GeoidSeparation;
@@ -1102,8 +1139,17 @@ static void StartRFslot(void)                                     // start the T
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
+#ifdef WTIH_FANET
+    getFNTpacket(TxFNTpacket, GPS);                           // produce FANET position packet
+    if(Random.GPS%11==0) FNTfreq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);  // transmit FANET on random in 1 per 11 slots
+    if(FNTfreq)                                               // if decision to transmit FANET
+    { // Serial.println("FNT:Tx");
+      Radio.Standby();
+      FNT_TxConfig();
+      Radio.SetChannel(FNTfreq);
+      Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len); }
+#endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
-    getFNTpacket(TxFNTpacket, GPS);
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
@@ -1126,6 +1172,12 @@ static void StartRFslot(void)                                     // start the T
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   // Serial.printf("StartRFslot() #2\n");
+#ifdef WTIH_FANET
+  if(FNTfreq)                                                 // if FANET transmission started then wait for it to finish
+  { while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); ReadBatteryVoltage(); }
+    // Serial.println("FNT:EoT");
+  }
+#endif
   RF_Slot=0;
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
@@ -1182,7 +1234,7 @@ static void StartRFslot(void)                                     // start the T
 }
 
 void loop()
-{ CY_PM_WFI;
+{ CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
 
   Button_Process();                                               // check for button short/long press
   if(Button_LowPower) { Sleep(); return; }
@@ -1190,24 +1242,24 @@ void loop()
   Radio_RxProcess();                                              // process received packets, if any
 
   CONS_Proc();                                                    // process input from the console
-  if(GPS_Process()==0) { GPS_Idle++; /* delay(1); */ }                  // process input from the GPS
+  if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS
                   else { GPS_Idle=0; RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++; } // [0.5dBm]
-  if(GPS_Done)                                                    // if state is GPS not sending data
+  if(GPS_State.BurstDone)                                                    // if state is GPS not sending data
   { if(GPS_Idle<2)                                                // GPS (re)started sending data
-    { GPS_Done=0;                                                 // change the state to GPS is sending data
-      GPS_PPS_ms = millis() - Parameters.PPSdelay;                // record the est. PPS time
+    { GPS_State.BurstDone=0;                                                 // change the state to GPS is sending data
+      GPS_PPS_ms = millis()-(GPS_State.FixValid?50:30); // Parameters.PPSdelay;                // record the est. PPS time
       // printf("GPS slot: start: %d [ms]\n\r", millis());
       GPS_PPS_UTC++; }
   }
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
     { // printf("GPS slot stop: %d [ms]\n\r", millis());
-      StartRFslot();                                              // start the RF slot
-      GPS_Done=1; }
+      StartRFslot();                                              // start the next RF slot
+      GPS_State.BurstDone=1; }
   }
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
-  if(RF_Slot==0)                                                  // 1st half of the second
+  if(RF_Slot==0)                                                  // while in the 1st sub-slot
   { if(TxPkt0 && SysTime >= TxTime0)                              //
     { int TxLen=0;
 #ifdef WITH_DIG_SIGN
@@ -1220,7 +1272,7 @@ void loop()
       // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
       TxPkt0=0; }
-    else if(SysTime >= 800)
+    else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { RF_Slot=1;
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
@@ -1228,7 +1280,7 @@ void loop()
       Radio.Rx(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
-  } else                                                          // 2nd half of the second
+  } else                                                          // while in the 2nd sub-slot
   { if(TxPkt1 && SysTime >= TxTime1)
     { int TxLen=0;
 #ifdef WITH_DIG_SIGN
