@@ -702,11 +702,11 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
 
 #ifdef WITH_FANET
 
-// static uint16_t FNT_Seq = 0xF000; // to search for correct sync word
+// static uint8_t FNT_Seq = 0x00; // to search for correct sync word
 
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
 { Packet.setAddress(Parameters.Address);
-  // char Seq[20]; sprintf(Seq, "Seq:%04X", FNT_Seq);
+  // char Seq[20]; sprintf(Seq, "Sync:%02X", FNT_Seq);
   // Serial.println(Seq);
   // Packet.setName(Seq);
   GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
@@ -868,10 +868,9 @@ static void ADSL_TxConfig(void)
 static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
 { Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
-  // uint16_t Sync = FNT_Test>>4; Sync<<=8; Sync |= FNT_Test&0x0F; Sync |= 0xF010;
-  // Radio.SetSyncWord(FNT_Seq);
-  // FNT_Seq++;
-  Radio.SetSyncWord(0xF414);             // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+  // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
+  // Radio.SetSyncWord(Sync);
+  Radio.SetSyncWord(0x00F1);             // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
 }
 // there seems to be an issue with the LoRa SYNC compatibility, some research on it is here:
 // https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
@@ -1159,6 +1158,7 @@ static void StartRFslot(void)                                     // start the T
       // Serial.println("FNT:Tx");
       Radio.Standby();
       FNT_TxConfig();
+      // FNT_Seq++;
       Radio.SetChannel(FNTfreq);
       // here we could check if the channel is free to transmit
       Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len);
