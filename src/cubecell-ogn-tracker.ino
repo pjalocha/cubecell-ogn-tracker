@@ -2,7 +2,7 @@
 
 // the following options do not work correctly yet in this code
 // #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
-// #define WITH_FANET
+#define WITH_FANET
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 
@@ -701,13 +701,19 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   return 1; }
 
 #ifdef WITH_FANET
-static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS)
+
+// static uint16_t FNT_Seq = 0xF000; // to search for correct sync word
+
+static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
 { Packet.setAddress(Parameters.Address);
+  // char Seq[20]; sprintf(Seq, "Seq:%04X", FNT_Seq);
+  // Serial.println(Seq);
+  // Packet.setName(Seq);
   GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
   return 1; }
 #endif
 
-static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
+static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode position into an OGN packet
 { Packet.HeaderWord = 0;
   Packet.Header.Address = Parameters.Address;                          // aircraft address
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
@@ -841,10 +847,10 @@ extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/
 
 // additional RF configuration reuired for OGN/ADS-L to work
 static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes)
-{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
+{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;  // specific BT
   SX126xSetModulationParams(&SX126x.ModulationParams);
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
-  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
+  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;                   //
   SX126xSetPacketParams(&SX126x.PacketParams);
   SX126xSetSyncWord((uint8_t *)SyncWord); }
 
@@ -859,11 +865,16 @@ static void ADSL_TxConfig(void)
   Radio_UpdateConfig(ADSL_SYNC, 8); }
 
 #ifdef WITH_FANET
-static void FNT_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    60);
-                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , I/Q-invert, timeout
-  static uint8_t FNT_SYNC[8] = { 0xF4, 0x14, 0, 0, 0, 0, 0, 0 } ;
-  SX126xSetSyncWord(FNT_SYNC); }
+static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
+                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
+  // uint16_t Sync = FNT_Test>>4; Sync<<=8; Sync |= FNT_Test&0x0F; Sync |= 0xF010;
+  // Radio.SetSyncWord(FNT_Seq);
+  // FNT_Seq++;
+  Radio.SetSyncWord(0xF414);             // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+}
+// there seems to be an issue with the LoRa SYNC compatibility, some research on it is here:
+// https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
 #endif
 
 static void OGN_RxConfig(void)
@@ -1103,7 +1114,7 @@ static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signatur
 static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
 static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
 
-#ifdef WTIH_FANET
+#ifdef WITH_FANET
 static FANET_Packet TxFNTpacket;            // FANET packet to transmit
 #endif
 
@@ -1126,7 +1137,7 @@ static void StartRFslot(void)                                     // start the T
   RX_OGN_Packets=0;                                                           // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
-#ifdef WTIH_FANET
+#ifdef WITH_FANET
   uint32_t FNTfreq=0;
 #endif
   if(GPS_State.FixValid)                                      // if position is valid
@@ -1139,15 +1150,19 @@ static void StartRFslot(void)                                     // start the T
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
-#ifdef WTIH_FANET
+#ifdef WITH_FANET
     getFNTpacket(TxFNTpacket, GPS);                           // produce FANET position packet
-    if(Random.GPS%11==0) FNTfreq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);  // transmit FANET on random in 1 per 11 slots
-    if(FNTfreq)                                               // if decision to transmit FANET
-    { // Serial.println("FNT:Tx");
+    static uint8_t FNT_BackOff=0;
+    if(FNT_BackOff) FNT_BackOff--;
+    else
+    { FNTfreq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);  // transmit FANET on random in 1 per 11 slots
+      // Serial.println("FNT:Tx");
       Radio.Standby();
       FNT_TxConfig();
       Radio.SetChannel(FNTfreq);
-      Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len); }
+      // here we could check if the channel is free to transmit
+      Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len);
+      FNT_BackOff = 9 + Random.RX%3; }
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_DIG_SIGN
@@ -1172,11 +1187,12 @@ static void StartRFslot(void)                                     // start the T
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   // Serial.printf("StartRFslot() #2\n");
-#ifdef WTIH_FANET
+#ifdef WITH_FANET
   if(FNTfreq)                                                 // if FANET transmission started then wait for it to finish
-  { while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); ReadBatteryVoltage(); }
+  { // Serial.println("FNT:...");
+    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); ReadBatteryVoltage(); }
     // Serial.println("FNT:EoT");
-  }
+    Radio.Standby(); }
 #endif
   RF_Slot=0;
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
