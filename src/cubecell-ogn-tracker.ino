@@ -3,6 +3,7 @@
 // the following options do not work correctly yet in this code
 // #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
 #define WITH_FANET
+#define WITH_PAW
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 
@@ -37,10 +38,16 @@
 #include "nmea.h"
 #include "manchester.h"
 #include "ogn1.h"
-#include "adsl.h"
 #include "crc1021.h"
 #include "freqplan.h"
 #include "rfm.h"
+
+// #ifdef WITH_ADSL
+#include "adsl.h"
+// #endif
+#ifdef WITH_PAW
+#include "paw.h"
+#endif
 #ifdef WITH_FANET
 #include "fanet.h"
 #endif
@@ -743,6 +750,9 @@ static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96,
 // ADS-L SYNC:       0xF5724B18 encoded in Manchester (fixed packet length 0x18 is included)
 static const uint8_t ADSL_SYNC[10] = { 0x55, 0x99, 0x95, 0xA6, 0x9A, 0x65, 0xA9, 0x6A, 0x00, 0x00 };
 
+// PilotAWare SYNC including the packet size and CRC seed
+static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
+
 static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
 static uint8_t RF_Channel = 0; // hopping channel
 
@@ -868,6 +878,10 @@ static void ADSL_TxConfig(void)
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
 
+static void PAW_TxConfig(void)
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 9600, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
+  Radio_UpdateConfig(PAW_SYNC, 8); }
+
 #ifdef WITH_FANET
 static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
 { Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
@@ -920,10 +934,25 @@ static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign
 { OGN_TxConfig();
   return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
+// #ifdef WITH_ADSL
 // transmit ADS-L packet with possible signature
 static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
 { ADSL_TxConfig();
   return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
+// #endif
+
+#ifdef WITH_PAW
+// transmit PilotAWare packet
+static int PAW_Transmit(const PAW_Packet &TxPacket)
+{ PAW_TxConfig();
+  uint8_t Packet[TxPacket.Size+2];
+  for(uint8_t Idx=0; Idx<TxPacket.Size; Idx++)
+  { Packet[Idx] = TxPacket.Byte[Idx]; }
+  PAW_Packet::Whiten(Packet, TxPacket.Size);
+  Packet[TxPacket.Size] = PAW_Packet::CRC8(Packet, TxPacket.Size);
+  Radio.Send(Packet, TxPacket.Size+1);
+  return TxPacket.Size+1; }
+#endif
 
 // ===============================================================================================
 
@@ -1126,6 +1155,10 @@ static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd 
 static FANET_Packet TxFNTpacket;            // FANET packet to transmit
 #endif
 
+#ifdef WITH_PAW
+static PAW_Packet TxPAWpacket;              // PAW packet to transmit
+#endif
+
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
 static int      RxRssiCount=0;              // count RSSI readouts
 
@@ -1187,6 +1220,9 @@ static void StartRFslot(void)                                     // start the T
     }
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
+#ifdef WITH_PAW
+    TxPAWpacket.Copy(TxPosPacket.Packet);
+#endif
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
