@@ -781,9 +781,13 @@ static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a p
   RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
-static void Radio_RxTimeout(void)                  // end-of-receive-period: not clear what to do here
-{
-}
+static void Radio_RxTimeout(void)                     // end-of-receive-period: not used for now
+{ }
+
+static bool Radio_CAD = 0;
+
+static void Radio_CadDone(bool CAD)                   // when carrier sense completes
+{ Radio_CAD=CAD; }
 
 // a new packet has been received callback - this should probably be a quick call
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
@@ -870,10 +874,14 @@ static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
-  Radio.SetSyncWord(0x00F1);             // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
-}
+  Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
 // there seems to be an issue with the LoRa SYNC compatibility, some research on it is here:
 // https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
+
+static void FNT_RxConfig(void)
+{ Radio.SetRxConfig(MODEM_LORA,     1,          7,        1, 0,        5,               16,              0, 0,   1,   0, 0,          0,    1);
+                 // Modem,     250kHz, Data-rate, Code-rate,  , preanble, RxSingle-timeout, variable/fixed, 0, CRC, hop,  , invert I/Q, continoue
+  Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
 #endif
 
 static void OGN_RxConfig(void)
@@ -1071,6 +1079,7 @@ void setup()
   Radio_Events.TxDone    = Radio_TxDone;             // Radio events
   Radio_Events.TxTimeout = Radio_TxTimeout;
   Radio_Events.RxDone    = Radio_RxDone;
+  Radio_Events.CadDone   = Radio_CadDone;
   Radio_Events.RxTimeout = Radio_RxTimeout;
   Radio.Init(&Radio_Events);
 
@@ -1149,6 +1158,7 @@ static void StartRFslot(void)                                     // start the T
     Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
+    // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_FANET
     getFNTpacket(TxFNTpacket, GPS);                           // produce FANET position packet
     static uint8_t FNT_BackOff=0;
@@ -1156,13 +1166,25 @@ static void StartRFslot(void)                                     // start the T
     else
     { FNTfreq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);  // transmit FANET on random in 1 per 11 slots
       // Serial.println("FNT:Tx");
+      // Random.RX  ^= Radio.Random();
+      // Random.GPS ^= Radio.Random();
+      // XorShift64(Random.Word);
       Radio.Standby();
-      FNT_TxConfig();
-      // FNT_Seq++;
+      FNT_RxConfig();
       Radio.SetChannel(FNTfreq);
-      // here we could check if the channel is free to transmit
-      Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len);
-      FNT_BackOff = 9 + Random.RX%3; }
+      Radio.StartCad(4);
+      while(Radio.GetStatus()==RF_CAD) { CONS_Proc(); }
+      // delay(1);
+      // Serial.printf("CAD:%d\n", Radio_CAD);
+      if(Radio_CAD) { Radio.Standby(); FNTfreq=0; }
+      else
+      { FNT_TxConfig();
+        Radio.SetChannel(FNTfreq);
+        // FNT_Seq++;
+        Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len);
+        // Serial.println("FNT:Tx");
+        FNT_BackOff = 9 + Random.RX%3; }
+    }
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_DIG_SIGN
