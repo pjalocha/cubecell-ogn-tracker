@@ -1152,11 +1152,15 @@ static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
 static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
 
 #ifdef WITH_FANET
-static FANET_Packet TxFNTpacket;            // FANET packet to transmit
+static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
+static uint32_t FNT_Freq = 0;                // [Hz]
+static  uint8_t FNT_BackOff=0;               // [sec]
 #endif
 
 #ifdef WITH_PAW
-static PAW_Packet TxPAWpacket;              // PAW packet to transmit
+static PAW_Packet PAW_TxPacket;              // PAW packet to transmit
+static uint32_t PAW_Freq = 0;                // [Hz]
+static  uint8_t PAW_BackOff=0;               // [sec]
 #endif
 
 static int32_t  RxRssiSum=0;                // sum RSSI readouts
@@ -1179,7 +1183,10 @@ static void StartRFslot(void)                                     // start the T
   CleanRelayQueue(GPS_PPS_UTC);
   bool TxPos=0;
 #ifdef WITH_FANET
-  uint32_t FNTfreq=0;
+  FNT_Freq=0;
+#endif
+#ifdef WITH_PAW
+  PAW_Freq=0;
 #endif
   if(GPS_State.FixValid)                                      // if position is valid
   { GPS_ValidUTC  = GPS.getUnixTime();
@@ -1193,35 +1200,36 @@ static void StartRFslot(void)                                     // start the T
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_FANET
-    getFNTpacket(TxFNTpacket, GPS);                           // produce FANET position packet
-    static uint8_t FNT_BackOff=0;
+    getFNTpacket(FNT_TxPacket, GPS);                           // produce FANET position packet
     if(FNT_BackOff) FNT_BackOff--;
-    else
-    { FNTfreq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);  // transmit FANET on random in 1 per 11 slots
-      // Serial.println("FNT:Tx");
+    else FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);
+    if(FNT_Freq)
+    { // Serial.println("FNT:Tx");
       // Random.RX  ^= Radio.Random();
       // Random.GPS ^= Radio.Random();
       // XorShift64(Random.Word);
       Radio.Standby();
       FNT_RxConfig();
-      Radio.SetChannel(FNTfreq);
+      Radio.SetChannel(FNT_Freq);
       Radio.StartCad(4);
       while(Radio.GetStatus()==RF_CAD) { CONS_Proc(); }
       // delay(1);
       // Serial.printf("CAD:%d\n", Radio_CAD);
-      if(Radio_CAD) { Radio.Standby(); FNTfreq=0; }
+      if(Radio_CAD) { Radio.Standby(); FNT_Freq=0; }
       else
       { FNT_TxConfig();
-        Radio.SetChannel(FNTfreq);
+        Radio.SetChannel(FNT_Freq);
         // FNT_Seq++;
-        Radio.Send(TxFNTpacket.Byte, TxFNTpacket.Len);
+        Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
         // Serial.println("FNT:Tx");
         FNT_BackOff = 9 + Random.RX%3; }
     }
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_PAW
-    TxPAWpacket.Copy(TxPosPacket.Packet);
+    PAW_TxPacket.Copy(TxPosPacket.Packet);                    // convert OGN to PAW
+    if(PAW_BackOff) PAW_BackOff--;
+    else PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC);
 #endif
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
@@ -1246,11 +1254,19 @@ static void StartRFslot(void)                                     // start the T
   CONS_Proc();
   // Serial.printf("StartRFslot() #2\n");
 #ifdef WITH_FANET
-  if(FNTfreq)                                                 // if FANET transmission started then wait for it to finish
+  if(FNT_Freq)                                                 // if FANET transmission started then wait for it to finish
   { // Serial.println("FNT:...");
-    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); ReadBatteryVoltage(); }
+    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); }
     // Serial.println("FNT:EoT");
     Radio.Standby(); }
+#endif
+#ifdef WITH_PAW
+  if(PAW_Freq)
+  { PAW_TxConfig();
+    Radio.SetChannel(PAW_Freq);
+    PAW_Transmit(PAW_TxPacket);
+    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); }
+    PAW_BackOff = 3 + Random.RX%3; }
 #endif
   RF_Slot=0;
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
