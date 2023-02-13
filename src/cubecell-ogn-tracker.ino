@@ -15,7 +15,7 @@
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
 
-#include "GPS_Air530.h"
+// #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
 
 #include "HT_SSD1306Wire.h"
@@ -119,6 +119,7 @@ static void ReadBatteryVoltage(void)
 // ===============================================================================================
 // GPS: apparently Air530Z is a very different device from Air530, does not look compatible at all
 
+const int GPS_BaudRate = 57600;
 static Air530ZClass GPS;                      // GPS
 
 // details not easy to find: https://www.cnblogs.com/luat/p/14667102.html
@@ -760,12 +761,16 @@ static RadioEvents_t Radio_Events;
 
 static void Radio_TxDone(void)  // when transmission completed
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
+  OGN_TxConfig();
   OGN_RxConfig();               // refresh the receiver configuration
+  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
   Radio.Rx(0); }
 
-static void Radio_TxTimeout(void) // this never happens really
+static void Radio_TxTimeout(void) // never happens, not clear under which conditions.
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
+  OGN_TxConfig();
   OGN_RxConfig();
+  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
   Radio.Rx(0); }
 
 static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
@@ -860,8 +865,8 @@ static void Radio_RxProcess(void)                                      // proces
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
 
 // additional RF configuration reuired for OGN/ADS-L to work
-static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes)
-{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;  // specific BT
+static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, RadioModShapings_t BT=MOD_SHAPING_G_BT_05)
+{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = BT;  // specific BT
   SX126xSetModulationParams(&SX126x.ModulationParams);
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
   SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;                   //
@@ -874,26 +879,30 @@ static void OGN_TxConfig(void)
   // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
   Radio_UpdateConfig(OGN1_SYNC, 8); }
 
-static void ADSL_TxConfig(void)
+static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
 
-static void PAW_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 9600, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
-  Radio_UpdateConfig(PAW_SYNC, 8); }
+#ifdef WITH_PAW
+static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-9.6kHz, 38400bps, long preamble
+{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+6, 9600, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
+  Radio_UpdateConfig(PAW_SYNC, 8, MOD_SHAPING_G_BT_05); }
+#endif
 
 #ifdef WITH_FANET
 static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         4,        5,              0,   1,   0, 0,          0,    100);
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
   Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
-// there seems to be an issue with the LoRa SYNC compatibility, some research on it is here:
+
+// there is an issue with the LoRa SYNC compatibility, some research on it is here:
 // https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
+// in short: SX1262 is not able to produce exact same SYNC as SX1276 set for SYNC=0xF1 but on receive both chips are tolerant to different SYNC
 
 static void FNT_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_LORA,     1,          7,        1, 0,        5,               16,              0, 0,   1,   0, 0,          0,    1);
+{ Radio.SetRxConfig(MODEM_LORA,     1,          7,        4, 0,        5,               16,              0, 0,   1,   0, 0,          0,    1);
                  // Modem,     250kHz, Data-rate, Code-rate,  , preanble, RxSingle-timeout, variable/fixed, 0, CRC, hop,  , invert I/Q, continoue
   Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
 #endif
@@ -1098,7 +1107,7 @@ void setup()
   BMP280_Init();
 #endif
 
-  GPS.begin(115200);
+  GPS.begin(GPS_BaudRate);
   // pinMode(GPIO11, INPUT);                            // GPS PPS ?
   // attachInterrupt(GPIO11, GPS_HardPPS, RISING);
 
@@ -1153,13 +1162,13 @@ static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd 
 
 #ifdef WITH_FANET
 static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
-static uint32_t FNT_Freq = 0;                // [Hz]
+static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
 static  uint8_t FNT_BackOff=0;               // [sec]
 #endif
 
 #ifdef WITH_PAW
 static PAW_Packet PAW_TxPacket;              // PAW packet to transmit
-static uint32_t PAW_Freq = 0;                // [Hz]
+static uint32_t PAW_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
 static  uint8_t PAW_BackOff=0;               // [sec]
 #endif
 
@@ -1203,6 +1212,7 @@ static void StartRFslot(void)                                     // start the T
     getFNTpacket(FNT_TxPacket, GPS);                           // produce FANET position packet
     if(FNT_BackOff) FNT_BackOff--;
     else FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);
+/*
     if(FNT_Freq)
     { // Serial.println("FNT:Tx");
       // Random.RX  ^= Radio.Random();
@@ -1224,6 +1234,7 @@ static void StartRFslot(void)                                     // start the T
         // Serial.println("FNT:Tx");
         FNT_BackOff = 9 + Random.RX%3; }
     }
+*/
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_PAW
@@ -1253,6 +1264,7 @@ static void StartRFslot(void)                                     // start the T
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   // Serial.printf("StartRFslot() #2\n");
+/*
 #ifdef WITH_FANET
   if(FNT_Freq)                                                 // if FANET transmission started then wait for it to finish
   { // Serial.println("FNT:...");
@@ -1268,6 +1280,7 @@ static void StartRFslot(void)                                     // start the T
     while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); }
     PAW_BackOff = 3 + Random.RX%3; }
 #endif
+*/
   RF_Slot=0;
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
@@ -1352,34 +1365,55 @@ void loop()
   if(RF_Slot==0)                                                  // while in the 1st sub-slot
   { if(TxPkt0 && SysTime >= TxTime0)                              //
     { int TxLen=0;
-#ifdef WITH_DIG_SIGN
-      if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
-                                            else TxLen=OGN_Transmit(*TxPkt0);
-#else
-      if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0) TxLen=ADSL_Transmit(ADSL_TxPosPacket);
-                                          else TxLen=OGN_Transmit(*TxPkt0);
-#endif
+// #ifdef WITH_DIG_SIGN
+//       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
+//                                             else TxLen=OGN_Transmit(*TxPkt0);
+// #else
+      if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
+      { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
+      else
+      { if(PAW_Freq)
+        { PAW_TxConfig();
+          Radio.SetChannel(PAW_Freq);
+          PAW_Transmit(PAW_TxPacket);
+          PAW_BackOff = 3 + Random.RX%3;
+          PAW_Freq=0; }
+        else
+        { TxLen=OGN_Transmit(*TxPkt0); }
+      }
+// #endif
       // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
       TxPkt0=0; }
     else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { RF_Slot=1;
+      OGN_TxConfig();
+      OGN_RxConfig();
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
-      // here we could transmit the FANET packet
       Radio.Rx(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
   { if(TxPkt1 && SysTime >= TxTime1)
     { int TxLen=0;
-#ifdef WITH_DIG_SIGN
-      if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
-                                            else TxLen=OGN_Transmit(*TxPkt1);
-#else
-      if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1) TxLen=ADSL_Transmit(ADSL_TxPosPacket);
-                                          else TxLen=OGN_Transmit(*TxPkt1);
-#endif
+// #ifdef WITH_DIG_SIGN
+//       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
+//                                             else TxLen=OGN_Transmit(*TxPkt1);
+// #else
+      if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
+      { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
+      else
+      { if(FNT_Freq)
+        { FNT_TxConfig();
+          Radio.SetChannel(FNT_Freq);
+          Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
+          FNT_BackOff = 9 + Random.RX%3;
+          FNT_Freq=0; }
+        else
+        { TxLen=OGN_Transmit(*TxPkt1); }
+      }
+// #endif
       // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
       TxPkt1=0; }
