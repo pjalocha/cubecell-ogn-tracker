@@ -194,17 +194,17 @@ void TEA_Decrypt_Key0 (uint32_t* Data, int Loops)
 // ==============================================================================================
 // XXTEA encryption/decryption
 
-static uint32_t XXTEA_MX(uint8_t E, uint32_t Y, uint32_t Z, uint8_t P, uint32_t Sum, const uint32_t Key[4])
-{ return ((((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + (Key[(P&3)^E] ^ Z))); }
+static uint32_t XXTEA_MX(uint32_t E, uint32_t Y, uint32_t Z, uint32_t P, uint32_t Sum, const uint32_t Key[4])
+{ return (((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + (Key[(P&3)^E] ^ Z)); }
 
-void XXTEA_Encrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t Loops)
+void XXTEA_Encrypt(uint32_t *Data, uint32_t Words, const uint32_t Key[4], uint32_t Loops)
 { const uint32_t Delta = 0x9e3779b9;
   uint32_t Sum = 0;
   uint32_t Z = Data[Words-1]; uint32_t Y;
   for( ; Loops; Loops--)
   { Sum += Delta;
-    uint8_t E = (Sum>>2)&3;
-    for (uint8_t P=0; P<(Words-1); P++)
+    uint32_t E = (Sum>>2)&3;
+    for (uint32_t P=0; P<(Words-1); P++)
     { Y = Data[P+1];
       Z = Data[P] += XXTEA_MX(E, Y, Z, P, Sum, Key); }
     Y = Data[0];
@@ -212,13 +212,13 @@ void XXTEA_Encrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t
   }
 }
 
-void XXTEA_Decrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t Loops)
+void XXTEA_Decrypt(uint32_t *Data, uint32_t Words, const uint32_t Key[4], uint32_t Loops)
 { const uint32_t Delta = 0x9e3779b9;
   uint32_t Sum = Loops*Delta;
   uint32_t Y = Data[0]; uint32_t Z;
   for( ; Loops; Loops--)
-  { uint8_t E = (Sum>>2)&3;
-    for (uint8_t P=Words-1; P; P--)
+  { uint32_t E = (Sum>>2)&3;
+    for (uint32_t P=Words-1; P; P--)
     { Z = Data[P-1];
       Y = Data[P] -= XXTEA_MX(E, Y, Z, P, Sum, Key); }
     Z = Data[Words-1];
@@ -228,27 +228,27 @@ void XXTEA_Decrypt(uint32_t *Data, uint8_t Words, const uint32_t Key[4], uint8_t
 }
 
 static uint32_t XXTEA_MX_KEY0(uint32_t Y, uint32_t Z, uint32_t Sum)
-{ return ((((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + Z)); }
+{ return (((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + Z); }
 
-void XXTEA_Encrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops)
+void XXTEA_Encrypt_Key0(uint32_t *Data, uint32_t Words, uint32_t Loops)
 { const uint32_t Delta = 0x9e3779b9;
   uint32_t Sum = 0;
   uint32_t Z = Data[Words-1]; uint32_t Y;
   for( ; Loops; Loops--)
   { Sum += Delta;
-    for (uint8_t P=0; P<(Words-1); P++)
+    for (uint32_t P=0; P<(Words-1); P++)
     { Y = Data[P+1];
       Z = Data[P] += XXTEA_MX_KEY0(Y, Z, Sum); }
     Y = Data[0];
     Z = Data[Words-1] += XXTEA_MX_KEY0(Y, Z, Sum); }
 }
 
-void XXTEA_Decrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops)
+void XXTEA_Decrypt_Key0(uint32_t *Data, uint32_t Words, uint32_t Loops)
 { const uint32_t Delta = 0x9e3779b9;
   uint32_t Sum = Loops*Delta;
   uint32_t Y = Data[0]; uint32_t Z;
   for( ; Loops; Loops--)
-  { for (uint8_t P=Words-1; P; P--)
+  { for (uint32_t P=Words-1; P; P--)
     { Z = Data[P-1];
       Y = Data[P] -= XXTEA_MX_KEY0(Y, Z, Sum); }
     Z = Data[Words-1];

@@ -1,7 +1,7 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
 // the following options do not work correctly yet in this code
-// #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+#define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
 #define WITH_FANET
 #define WITH_PAW
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
@@ -86,7 +86,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "OGN-CC"
-#define SOFT_NAME "2023.02.07"
+#define SOFT_NAME "2023.02.14"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -430,15 +430,11 @@ static uint8_t OLED_isON=0;
 
 static void OLED_ON(void)
 { if(OLED_isON) return;
-  // Serial.println("OLED: ON");
-  Display.wakeup();
-  OLED_isON=1; }
+  Display.wakeup(); OLED_isON=1; }
 
 static void OLED_OFF(void)
 { if(!OLED_isON) return;
-  // Serial.println("OLED: OFF");
-  Display.sleep();
-  OLED_isON=0; }
+  Display.sleep(); OLED_isON=0; }
 
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
