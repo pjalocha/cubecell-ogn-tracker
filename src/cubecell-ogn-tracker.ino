@@ -713,11 +713,12 @@ static void OLED_DispPage(const GPS_Position &GPS)
 
 static void LED_OFF   (void) { Pixels.setPixelColor( 0,   0,   0,   0, 0); Pixels.show(); }
 static void LED_Red   (void) { Pixels.setPixelColor( 0, 255,   0,   0, 0); Pixels.show(); }
-static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  96,   0, 0); Pixels.show(); }
-static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); Pixels.show(); }
-static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
-static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
+static void LED_Green (void) { Pixels.setPixelColor( 0,   0,  96,   0, 0); Pixels.show(); }      // reception
+static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); Pixels.show(); }      // GPS has neither time nor position
+static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }      // GPS has time but not position
+static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }      // GPS has position
 static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixels.show(); }
+
 // ===============================================================================================
 // OGN packets
 
@@ -1252,8 +1253,11 @@ static void EndOfGPS(void)                                 // after the GPS comp
   GPS_State.TimeValid = GPS.isTimeValid();
   GPS_State.DateValid = GPS.isDateValid();
   GPS_State.FixValid  = GPS.isValid();
-  if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_TimeSync.PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
-                                           else  { LED_Yellow(); }
+  if(GPS_State.TimeValid && GPS_State.DateValid)
+  { if(GPS_State.FixValid) LED_Blue();
+                      else LED_Yellow();
+    GPS_TimeSync.PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
+  else  { LED_Orange(); }
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_TimeSync.PPS_UTC);
@@ -1376,7 +1380,7 @@ void loop()
     }
     else
     { uint32_t OFFtime = msTime-GPS_OFF_ms;                          // [ms] for how long the GPS was OFF
-      if(OFFtime>=600000) { GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
+      if(OFFtime>=1800000) { GPS_ON(); Button_ForceActive(); GPS_Idle=0; }
     }
   }
 
