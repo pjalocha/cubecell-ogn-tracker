@@ -805,6 +805,8 @@ class GPS_Time
      Days -= 365*Year + (Year/4);
      Month = Days/31;
      Day   = Days-(uint16_t)Month*31+1; Month++;
+     uint8_t MaxDay=MonthDays();
+     if(Day>MaxDay) { Day-=MaxDay; Month++; }
      uint32_t CheckTime = getUnixTime();
      if(CheckTime<Time) incrDate((Time-CheckTime)/SecsPerDay); }
 
