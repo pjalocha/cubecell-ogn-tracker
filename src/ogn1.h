@@ -191,34 +191,72 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      { printf(" %02X", Byte()[Idx]); }
      printf("\n"); }
 
-   uint8_t WriteStatus(char *Out)
-   { uint8_t Len=0;
+   int Print(char *Out) const
+   { int Len=0;
+     Out[Len++]='0'+Header.AddrType; Out[Len++]=':';
+     uint32_t Addr = Header.Address;
+     Len+=Format_Hex(Out+Len, (uint8_t)(Addr>>16));
+     Len+=Format_Hex(Out+Len, (uint16_t)Addr);
+     Out[Len++]=' ';
+     Out[Len++]='R';
+     Out[Len++]='0'+Header.Relay;
+     if(!Header.NonPos) return Len+PrintPosition(Out+Len);
+     if(isStatus()) return Len+PrintDeviceStatus(Out+Len);
+     if(isInfo  ()) return Len+PrintDeviceInfo(Out+Len);
+     Out[Len]=0; return Len; }
+
+   int PrintPosition(char *Out) const
+   { int Len=0;
+     Out[Len++]=' ';
+     // Out[Len++]=HexDigit(Position.AcftType); Out[Len++]=':';
+     // Len+=Format_SignDec(Out+Len, -(int16_t)RxRSSI/2); Out[Len++]='d'; Out[Len++]='B'; Out[Len++]='m';
+     // Out[Len++]=' ';
+     Len+=Format_UnsDec(Out+Len, (uint32_t)Position.Time, 2);
+     Len+=Format_String(Out+Len, "s [");
+     Len+=Format_SignDec(Out+Len, DecodeLatitude()/6, 7, 5);
+     Out[Len++]=',';
+     Len+=Format_SignDec(Out+Len, DecodeLongitude()/6, 8, 5);
+     Len+=Format_String(Out+Len, "]deg ");
+     // Len+=Format_Latitude(Out+Len, DecodeLatitude());
+     // Out[Len++]=' ';
+     // Len+=Format_Longitude(Out+Len, DecodeLongitude());
+     // Out[Len++]=' ';
+     Len+=Format_UnsDec(Out+Len, (uint32_t)DecodeAltitude()); Out[Len++]='m';
+     Out[Len++]=' ';
+     Len+=Format_UnsDec(Out+Len, (uint32_t)DecodeSpeed(), 2, 1); Out[Len++]='m'; Out[Len++]='/'; Out[Len++]='s';
+     Out[Len++]=' ';
+     Len+=Format_SignDec(Out+Len, (int32_t)DecodeClimbRate(), 2, 1); Out[Len++]='m'; Out[Len++]='/'; Out[Len++]='s';
+     Out[Len]=0;
+     return Len; }
+
+   int PrintDeviceStatus(char *Out) const
+   { int Len=0;
      Out[Len++]=' '; Out[Len++]='h'; Len+=Format_Hex(Out+Len, (uint8_t)Status.Hardware);
      Out[Len++]=' '; Out[Len++]='v'; Len+=Format_Hex(Out+Len, (uint8_t)Status.Firmware);
-     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, Status.Satellites); Out[Len++]='s'; Out[Len++]='a'; Out[Len++]='t';
+     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, (uint32_t)Status.Satellites); Out[Len++]='s'; Out[Len++]='a'; Out[Len++]='t';
      Out[Len++]='/'; Out[Len++]='0'+Status.FixQuality;
-     Out[Len++]='/'; Len+=Format_UnsDec(Out+Len, Status.SatSNR+8); Out[Len++]='d'; Out[Len++]='B';
-     Out[Len++]=' '; Len+=Format_SignDec(Out+Len, DecodeAltitude(), 1, 0, 1); Out[Len++]='m';
+     Out[Len++]='/'; Len+=Format_UnsDec(Out+Len, (uint32_t)Status.SatSNR+8); Out[Len++]='d'; Out[Len++]='B';
+     Out[Len++]=' '; Len+=Format_SignDec(Out+Len, (int32_t)DecodeAltitude(), 1, 0, 1); Out[Len++]='m';
      if(Status.Pressure>0)
      { Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, (((uint32_t)Status.Pressure<<3)+5)/10, 2, 1); Out[Len++]='h'; Out[Len++]='P'; Out[Len++]='a'; }
      if(hasTemperature())
-     { Out[Len++]=' '; Len+=Format_SignDec(Out+Len, DecodeTemperature(), 2, 1); Out[Len++]='d'; Out[Len++]='e'; Out[Len++]='g'; Out[Len++]='C'; }
+     { Out[Len++]=' '; Len+=Format_SignDec(Out+Len, (int32_t)DecodeTemperature(), 2, 1); Out[Len++]='d'; Out[Len++]='e'; Out[Len++]='g'; Out[Len++]='C'; }
      if(hasHumidity())
-     { Out[Len++]=' '; Len+=Format_SignDec(Out+Len, DecodeHumidity(), 2, 1); Out[Len++]='%'; }
-     Out[Len++]=' '; Len+=Format_SignDec(Out+Len, ((uint32_t)DecodeVoltage()*100+32)>>6, 3, 2); Out[Len++]='V';
-     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, Status.TxPower+4);
-     Out[Len++]='/'; Out[Len++]='-'; Len+=Format_UnsDec(Out+Len, 5*Status.RadioNoise, 2, 1); Out[Len++]='d'; Out[Len++]='B'; Out[Len++]='m';
-     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, (1<<Status.RxRate)-1); Out[Len++]='/'; Out[Len++]='m'; Out[Len++]='i'; Out[Len++]='n';
+     { Out[Len++]=' '; Len+=Format_SignDec(Out+Len, (int32_t)DecodeHumidity(), 2, 1); Out[Len++]='%'; }
+     Out[Len++]=' '; Len+=Format_SignDec(Out+Len, ((int32_t)DecodeVoltage()*100+32)>>6, 3, 2); Out[Len++]='V';
+     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, (uint32_t)Status.TxPower+4);
+     Out[Len++]='/'; Out[Len++]='-'; Len+=Format_UnsDec(Out+Len, (uint32_t)Status.RadioNoise*5, 2, 1); Out[Len++]='d'; Out[Len++]='B'; Out[Len++]='m';
+     Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, ((uint32_t)1<<Status.RxRate)-1); Out[Len++]='/'; Out[Len++]='m'; Out[Len++]='i'; Out[Len++]='n';
      Out[Len]=0; return Len; }
-
-   uint8_t WriteDeviceStatus(char *Out)
+/*
+   int WriteDeviceStatus(char *Out) const
    { return sprintf(Out, " h%02X v%02X %dsat/%d/%ddB %ldm %3.1fhPa %+4.1fdegC %3.1f%% %4.2fV %d/%+4.1fdBm %d/min",
              Status.Hardware, Status.Firmware, Status.Satellites, Status.FixQuality, 8+Status.SatSNR, (long int)DecodeAltitude(),
              0.08*Status.Pressure, 0.1*DecodeTemperature(), 0.1*DecodeHumidity(),
              (1.0/64)*DecodeVoltage(), Status.TxPower+4, -0.5*Status.RadioNoise, (1<<Status.RxRate)-1 );
    }
-
-   int WriteDeviceInfo(char *Out)
+*/
+   int PrintDeviceInfo(char *Out) const
    { int Len=0;
      char Value[16];
      uint8_t InfoType;
@@ -261,10 +299,9 @@ class OGN1_Packet          // Packet structure for the OGN tracker
    bool isManufMsg(void) const { return Status.ReportType==15; }
 
    void Print(void) const
-   { if(!Header.NonPos) { PrintPosition(); return; }
-     if(isStatus()) { PrintDeviceStatus(); return; }
-     if(isInfo  ()) { PrintDeviceInfo(); return; }
-   }
+   { if(!Header.NonPos) return PrintPosition();
+     if(isStatus()) return PrintDeviceStatus();
+     if(isInfo  ()) return PrintDeviceInfo(); }
 
    void PrintDeviceInfo(void) const
    { printf("%c:%06lX R%c%c%c:",
@@ -348,17 +385,17 @@ class OGN1_Packet          // Packet structure for the OGN tracker
          Len+=Format_String(JSON+Len, ",\"alt_std_m\":");
          Len+=Format_SignDec(JSON+Len, Altitude, 1, 0, 1); }
        Len+=Format_String(JSON+Len, ",\"track_deg\":");
-       Len+=Format_UnsDec(JSON+Len, DecodeHeading(), 2, 1);
+       Len+=Format_UnsDec(JSON+Len, (uint32_t)DecodeHeading(), 2, 1);
        Len+=Format_String(JSON+Len, ",\"speed_mps\":");
-       Len+=Format_UnsDec(JSON+Len, DecodeSpeed(), 2, 1);
+       Len+=Format_UnsDec(JSON+Len, (uint32_t)DecodeSpeed(), 2, 1);
        if(hasClimbRate())
        { Len+=Format_String(JSON+Len, ",\"climb_mps\":");
-         Len+=Format_SignDec(JSON+Len, DecodeClimbRate(), 2, 1, 1); }
+         Len+=Format_SignDec(JSON+Len, (int32_t)DecodeClimbRate(), 2, 1, 1); }
        if(hasTurnRate())
        { Len+=Format_String(JSON+Len, ",\"turn_dps\":");
-         Len+=Format_SignDec(JSON+Len, DecodeTurnRate(), 2, 1, 1); }
+         Len+=Format_SignDec(JSON+Len, (int32_t)DecodeTurnRate(), 2, 1, 1); }
        Len+=Format_String(JSON+Len, ",\"DOP\":");
-       Len+=Format_UnsDec(JSON+Len, 10+DecodeDOP(), 2, 1); }
+       Len+=Format_UnsDec(JSON+Len, (uint32_t)DecodeDOP()+10, 2, 1); }
      else if(!Header.Encrypted && Header.NonPos)                         // non-encrypted status and info
      { if(isStatus())                                                    // status
        { }
@@ -390,6 +427,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      MAV->tslc          =    0;
      MAV->emiter_type   =    0; }
 */
+/*
    void Encode(MAV_ADSB_VEHICLE *MAV)
    { MAV->ICAO_address = Header.Address;
      MAV->lat           = ((int64_t)50*DecodeLatitude()+1)/3;          // convert coordinates to [1e-7deg]
@@ -414,7 +452,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
       10, 14,  2, 19  };  // airship,          UAV,              ground vehiele, fixed object
      MAV->emiter_type   =    EmitterType[Position.AcftType];           // convert from the OGN
    }
-
+*/
    static const char *getAprsIcon(uint8_t AcftType)
    { static const char *AprsIcon[16] = // Icons for various FLARM acftType's
      { "/z",  //  0 = ?
@@ -592,9 +630,9 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      Msg[Len++] = 'h';
 
      if(Header.NonPos)                                            // status and info packets
-     {      if(isStatus()) Len+=WriteStatus(Msg+Len);
-       else if(isInfo()  ) Len+=WriteDeviceInfo(Msg+Len);
-       /* Msg[Len++]='\n'; */ Msg[Len]=0; return Len; }
+     {      if(isStatus()) Len+=PrintDeviceStatus(Msg+Len);
+       else if(isInfo()  ) Len+=PrintDeviceInfo(Msg+Len);
+       Msg[Len]=0; return Len; }
 
      if(Header.Encrypted)                                         // encrypted packets
      { Msg[Len++]=' ';
@@ -626,10 +664,10 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      Msg[Len++] = NegLon ? 'W':'E';
      Msg[Len++] = Icon[1];
 
-     Len+=Format_UnsDec(Msg+Len, (DecodeHeading()+5)/10, 3);
+     Len+=Format_UnsDec(Msg+Len, ((uint32_t)DecodeHeading()+5)/10, 3);
      Msg[Len++] = '/';
      Len+=Format_UnsDec(Msg+Len, ((uint32_t)DecodeSpeed()*199+512)>>10, 3);
-     Msg[Len++] = '/'; Msg[Len++] = 'A'; Msg[Len++] = '='; Len+=Format_UnsDec(Msg+Len, MetersToFeet(DecodeAltitude()), 6);
+     Msg[Len++] = '/'; Msg[Len++] = 'A'; Msg[Len++] = '='; Len+=Format_UnsDec(Msg+Len, (uint32_t)MetersToFeet(DecodeAltitude()), 6);
 
      Msg[Len++] = ' ';
      Msg[Len++] = '!';
@@ -644,19 +682,19 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      { Msg[Len++] = ' '; Len+=Format_SignDec(Msg+Len, ((int32_t)DecodeClimbRate()*10079+256)>>9, 3); Msg[Len++] = 'f'; Msg[Len++] = 'p'; Msg[Len++] = 'm'; }
 
      if(hasTurnRate())
-     { Msg[Len++] = ' '; Len+=Format_SignDec(Msg+Len, DecodeTurnRate()/3, 2, 1); Msg[Len++] = 'r'; Msg[Len++] = 'o'; Msg[Len++] = 't'; }
+     { Msg[Len++] = ' '; Len+=Format_SignDec(Msg+Len, (int32_t)DecodeTurnRate()/3, 2, 1); Msg[Len++] = 'r'; Msg[Len++] = 'o'; Msg[Len++] = 't'; }
 
      if(hasBaro())
      { int32_t Alt = DecodeStdAltitude();
        if(Alt<0) Alt=0;
        Msg[Len++] = ' '; Msg[Len++] = 'F'; Msg[Len++] = 'L';
-       Len+=Format_UnsDec(Msg+Len, MetersToFeet((uint32_t)Alt), 5, 2); }
+       Len+=Format_UnsDec(Msg+Len, (uint32_t)MetersToFeet((uint32_t)Alt), 5, 2); }
 
      uint16_t DOP=10+DecodeDOP();
      uint16_t HorPrec=(DOP*2+5)/10; if(HorPrec>63) HorPrec=63;
      uint16_t VerPrec=(DOP*3+5)/10; if(VerPrec>63) VerPrec=63;
      Msg[Len++] = ' ';  Msg[Len++] = 'g'; Msg[Len++] = 'p'; Msg[Len++] = 's';
-     Len+=Format_UnsDec(Msg+Len, HorPrec); Msg[Len++] = 'x'; Len+=Format_UnsDec(Msg+Len, VerPrec);
+     Len+=Format_UnsDec(Msg+Len, (uint32_t)HorPrec); Msg[Len++] = 'x'; Len+=Format_UnsDec(Msg+Len, (uint32_t)VerPrec);
 
      // Msg[Len++]='\n';
      Msg[Len]=0;
@@ -692,7 +730,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      if(abs(Radius)>MaxRadius) return 0;
      return Radius; }
    int16_t calcTurnRadius(int16_t MaxRadius=0x7FFF) { return calcTurnRadius(DecodeSpeed(), DecodeTurnRate(), MaxRadius); }
-
+/*
    uint8_t Print(char *Out) const
    { uint8_t Len=0;
      Out[Len++]=HexDigit(Position.AcftType); Out[Len++]=':';
@@ -716,7 +754,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      Len+=Format_SignDec(Out+Len, DecodeClimbRate(), 2, 1); Out[Len++]='m'; Out[Len++]='/'; Out[Len++]='s';
      Out[Len++]='\n'; Out[Len]=0;
      return Len; }
-
+*/
    // OGN1_Packet() { Clear(); }
    void Clear(void) { HeaderWord=0; Data[0]=0; Data[1]=0; Data[2]=0; Data[3]=0; }
 

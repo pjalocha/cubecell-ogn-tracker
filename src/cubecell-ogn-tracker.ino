@@ -510,7 +510,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
     // Len+=Format_Hex(Line+Len, Packet->Rank);                       // rank for relay
     // Line[Len++]=' ';
     // Line[Len++]=':';
-    Len+=Format_UnsDec(Line+Len, Packet->Packet.DecodeAltitude()); // [m] altitude
+    Len+=Format_UnsDec(Line+Len, (uint32_t)Packet->Packet.DecodeAltitude()); // [m] altitude
     Line[Len++]='m'; Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, Dir, 3);                             // [deg] direction to target
     Line[Len++]=' ';
@@ -552,11 +552,11 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.drawString(128, 16, Line); }
   { uint8_t Len=0;
     if(GPS.Sec&1)
-    { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, GPS.Satellites);
-                  else  Len+=Format_UnsDec(Line+Len, GPS_SatCnt);
+    { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, (uint32_t)GPS.Satellites);
+                  else  Len+=Format_UnsDec(Line+Len, (uint32_t)GPS_SatCnt);
       Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; }
     else
-    { Len+=Format_UnsDec(Line+Len, (GPS_SatSNR+2)/4, 2);
+    { Len+=Format_UnsDec(Line+Len, ((uint32_t)GPS_SatSNR+2)/4, 2);
       Line[Len++]='d'; Line[Len++]='B'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -574,9 +574,9 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.drawString(0, 48, Line);                           // 4th line: number of aircrafts and battery voltage
     Len=0;
 */
-    if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
+    if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, ((uint32_t)BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
     else
-    { Len+=Format_UnsDec(Line+Len, BattCapacity); Line[Len++]= '%'; }
+    { Len+=Format_UnsDec(Line+Len, (uint32_t)BattCapacity); Line[Len++]= '%'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
@@ -587,7 +587,7 @@ static void OLED_RF(void)                 // display RF-related data
   Display.setFont(ArialMT_Plain_16);
 
   uint8_t Len=Format_String(Line, "SX1262: ");
-  Len+=Format_SignDec(Line+Len, (int16_t)Parameters.TxPower);              // Tx power
+  Len+=Format_SignDec(Line+Len, (int32_t)Parameters.TxPower);              // Tx power
   Len+=Format_String(Line+Len, "dBm");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -602,14 +602,14 @@ static void OLED_RF(void)                 // display RF-related data
 
   Len=0; uint8_t Acfts = RelayQueue.size();
   if(Acfts)
-  { Len+=Format_UnsDec(Line+Len, Acfts);
+  { Len+=Format_UnsDec(Line+Len, (uint32_t)Acfts);
     Len+=Format_String(Line+Len, " Acft");
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 32, Line); }
 
   Len=0;
-  Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+  Len+=Format_UnsDec(Line+Len, (uint32_t)RX_OGN_Count64);
   Len+=Format_String(Line+Len, "/min");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -618,7 +618,7 @@ static void OLED_RF(void)                 // display RF-related data
   Len=0;
   Len+=Format_String(Line+Len, Radio_FreqPlan.getPlanName());                 // name of the frequency plan
   Line[Len++]=' ';
-  Len+=Format_UnsDec(Line+Len, (uint16_t)(Radio_FreqPlan.getCenterFreq()/100000), 3, 1); // center frequency
+  Len+=Format_UnsDec(Line+Len, (uint32_t)(Radio_FreqPlan.getCenterFreq()/100000), 3, 1); // center frequency
   Len+=Format_String(Line+Len, "MHz");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -729,10 +729,10 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode
 
 static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce position ADS-L packet
 { Packet.Init();
-  Packet.setAddress (Parameters.Address);
-  Packet.setAddrType(Parameters.AddrType);
-  Packet.setRelay(0);
-  Packet.setAcftType(Parameters.AcftType);
+  Packet.setAddress    (Parameters.Address);
+  Packet.setAddrTypeOGN(Parameters.AddrType);
+  // Packet.setRelay(0);
+  Packet.setAcftTypeOGN(Parameters.AcftType);
   GPS.Encode(Packet);
   return 1; }
 

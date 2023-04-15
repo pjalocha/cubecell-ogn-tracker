@@ -502,7 +502,7 @@ uint16_t StratuxPort;
     Len+=Format_String(Line+Len, " SX1272");
 #endif
     Line[Len++]='/';
-    Len+=Format_SignDec(Line+Len, (int16_t)TxPower);
+    Len+=Format_SignDec(Line+Len, (int32_t)TxPower);
     Len+=Format_String(Line+Len, "dBm");
     Line[Len++]=' '; Len+=Format_SignDec(Line+Len, (int32_t)RFchipFreqCorr, 2, 1); Len+=Format_String(Line+Len, "ppm");
     Len+=Format_String(Line+Len, " CON:");
@@ -526,7 +526,7 @@ uint16_t StratuxPort;
     Len+=Format_String(Line+Len, ",FreqPlan=");
     Line[Len++]='0'+FreqPlan;
     Len+=Format_String(Line+Len, ",TxPower=");
-    Len+=Format_SignDec(Line+Len, (int16_t)TxPower);
+    Len+=Format_SignDec(Line+Len, (int32_t)TxPower);
     Len+=NMEA_AppendCheckCRNL(Line, Len);
     Line[Len]=0; return Len; }
 
