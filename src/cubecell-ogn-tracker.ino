@@ -358,8 +358,8 @@ static int          GPS_Ptr = 0;       //
 static GPS_Position GPS_Pipe[2];       // two most recent GPS readouts
 
 static uint32_t GPS_ValidUTC = 0;      // [sec]        when the last position of the GPS was recorded
-static uint32_t GPS_Latitude = 0;      // [1/60000deg]
-static uint32_t GPS_Longitude = 0;     // [1/60000deg]
+static  int32_t GPS_Latitude = 0;      // [1/60000deg]
+static  int32_t GPS_Longitude = 0;     // [1/60000deg]
 static  int32_t GPS_Altitude = 0;      // [0.1m]
 static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
