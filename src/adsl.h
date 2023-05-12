@@ -127,16 +127,44 @@ class ADSL_Packet
                                0, 0, 0, 0, 0, 0, 0, 0 } ;
      return Map[AcftCat]; }
 
+   // uint8_t getAcftTypeADSB(void) const
+   // { uint8_t Cat=0; return Cat; }
+
+// aircraft-types
+//                   ADS-L   FLARM/OGN/PilotAware  FANET  ADS-B  GDL90
+// no info             0        0                          x0
+// motor plane         1        8                          A1
+// jet plane          1-2       9                          A2
+// towing plane        1        2                          A1
+// drop plane          1        5                          A1
+// light fixed wing    1        2                          A1     1
+// small fixed wing    2        2                          A2     2
+//
+// rotorcraft          3        3                          A7     7
+// glider              4        1                          B1     9
+// balloon             5        B                          B2    10
+// airship             5        C                          B2    10
+// Ultralight          6                                   B4    12
+// hang-glider         7        6                          B4    12
+// para-glider         7        7                          B4    12
+// skydiver            8        4                          B3    11
+// VTOL/UAM            9        3                          A7
+// gyrocopter         10        3                          A7
+// UAV                11-13     D                          B6    14
+// space vehicle                                           B7    15
+// ground vehicle               E                          C3 C1 17 18
+// Fixed object                 F                          C4-C7 19
+
 // --------------------------------------------------------------------------------------------------------
 
-   uint32_t getTime(uint16_t &msTime, uint32_t RefTime, int FwdMargin=3) const
-   { msTime=250*(TimeStamp&3);
+   uint32_t getTime(uint16_t &msTime, uint32_t RefTime, int FwdMargin=3) const // work out the position timestamp
+   { msTime=250*(TimeStamp&3);                                                 // [ms] fractional part of the timestamp
      if(TimeStamp>=60) return 0;
      int Sec=RefTime%15;
      int DiffSec=(TimeStamp>>2)-Sec;
      if(DiffSec>FwdMargin) DiffSec-=15;
      else if(DiffSec<=(-15+FwdMargin)) DiffSec+=15;
-     return RefTime+DiffSec; }           // get out the correct position timestamp
+     return RefTime+DiffSec; }                                                 // [sec] get out the correct position timestamp
 
    uint8_t getHorAccur(void) const
    { const uint8_t Map[8] = { 63, 63, 63, 63, 63, 30, 10, 3 } ;

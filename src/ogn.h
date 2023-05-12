@@ -1154,39 +1154,104 @@ class GPS_Position: public GPS_Time
      calcLatitudeCosine();
      NMEAframes++; return 1; }
 
-   uint8_t WriteGGA(char *GGA)
-   { uint8_t Len=0;
-     Len+=Format_String(GGA+Len, "$GPGGA,");
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)Hour, 2);
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)Min, 2);
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)Sec, 2);
-     GGA[Len++]='.';
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)mSec, 3);
-     GGA[Len++]=',';
-     Len+=Format_Latitude(GGA+Len, Latitude);
-     GGA[Len]=GGA[Len-1]; GGA[Len-1]=','; Len++;
-     GGA[Len++]=',';
-     Len+=Format_Longitude(GGA+Len, Longitude);
-     GGA[Len]=GGA[Len-1]; GGA[Len-1]=','; Len++;
-     GGA[Len++]=',';
-     GGA[Len++]='0'+FixQuality;
-     GGA[Len++]=',';
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)Satellites);
-     GGA[Len++]=',';
-     Len+=Format_UnsDec(GGA+Len, (uint32_t)HDOP, 2, 1);
-     GGA[Len++]=',';
-     Len+=Format_SignDec(GGA+Len, Altitude, 3, 1);
-     GGA[Len++]=',';
-     GGA[Len++]='M';
-     GGA[Len++]=',';
-     Len+=Format_SignDec(GGA+Len, (int32_t)GeoidSeparation, 3, 1);
-     GGA[Len++]=',';
-     GGA[Len++]='M';
-     GGA[Len++]=',';
-     GGA[Len++]=',';
-     Len += NMEA_AppendCheckCRNL(GGA, Len);
-     GGA[Len]=0;
-     return Len; }
+   uint8_t WritePGRMZ(char *NMEA)
+   { uint8_t Len=Format_String(NMEA, "$PGRMZ,");
+     if(hasBaro) Len+=Format_SignDec(NMEA+Len, MetersToFeet(StdAltitude)/10, 1, 0, 1);
+     Len+=Format_String(NMEA+Len, ",f,");                // normally f for feet, but metres and m works with XcSoar
+     NMEA[Len++]='0'+FixMode;                            // 1 = no fix, 2 = 2D, 3 = 3D
+     Len+=NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0; return Len; }
+
+   uint8_t WriteGSA(char *NMEA) const
+   { uint8_t Len=Format_String(NMEA+Len, "$GPGSA,A,");
+     NMEA[Len++]='0'+FixMode;
+     Len+=Format_String(NMEA+Len, ",,,,,,,,,,,,,");
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)PDOP, 2, 1);
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)HDOP, 2, 1);
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)VDOP, 2, 1);
+     Len += NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0; return Len; }
+
+   uint8_t WriteRMC(char *NMEA) const
+   { uint8_t Len=Format_String(NMEA+Len, "$GPRMC,");
+     if(isTimeValid())
+     { Len+=Format_UnsDec(NMEA+Len, (uint32_t)Hour, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Min, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Sec, 2);
+       NMEA[Len++]='.';
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)mSec, 3);
+       Len--; }
+     NMEA[Len++]=',';
+     NMEA[Len++] = isValid()?'A':'V';
+     NMEA[Len++]=',';
+     if(isValid())
+     { Len+=Format_Latitude(NMEA+Len, Latitude);
+       // NMEA[Len+1]=NMEA[Len-1]; NMEA[Len-1]='0'; NMEA[Len]=','; Len+=2; }
+       NMEA[Len]=NMEA[Len-1]; NMEA[Len-1]=','; Len++; }
+     else NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     if(isValid())
+     { Len+=Format_Longitude(NMEA+Len, Longitude);
+       // NMEA[Len+1]=NMEA[Len-1]; NMEA[Len-1]='0'; NMEA[Len]=','; Len+=2; }
+       NMEA[Len]=NMEA[Len-1]; NMEA[Len-1]=','; Len++; }
+     else NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, ((uint32_t)Speed*1985+512)>>10, 2, 1);  // [0.1m/s] => [0.1kt]
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)Heading, 2, 1);
+     NMEA[Len++]=',';
+     if(isDateValid())
+     { Len+=Format_UnsDec(NMEA+Len, (uint32_t)Day, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Month, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Year, 2); }
+     NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     NMEA[Len++]=isValid()?'A':'N';
+     Len += NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0; return Len; }
+
+   uint8_t WriteGGA(char *NMEA) const
+   { uint8_t Len=Format_String(NMEA+Len, "$GPGGA,");
+     if(isTimeValid())
+     { Len+=Format_UnsDec(NMEA+Len, (uint32_t)Hour, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Min, 2);
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)Sec, 2);
+       NMEA[Len++]='.';
+       Len+=Format_UnsDec(NMEA+Len, (uint32_t)mSec, 3);
+       Len--; }
+     NMEA[Len++]=',';
+     if(isValid())
+     { Len+=Format_Latitude(NMEA+Len, Latitude);
+       // NMEA[Len+1]=NMEA[Len-1]; NMEA[Len-1]='0'; NMEA[Len]=','; Len+=2; }
+       NMEA[Len]=NMEA[Len-1]; NMEA[Len-1]=','; Len++; }
+     else NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     if(isValid())
+     { Len+=Format_Longitude(NMEA+Len, Longitude);
+       // NMEA[Len+1]=NMEA[Len-1]; NMEA[Len-1]='0'; NMEA[Len]=','; Len+=2; }
+       NMEA[Len]=NMEA[Len-1]; NMEA[Len-1]=','; Len++; }
+     else NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     if(isValid()) NMEA[Len++]='0'+FixQuality;
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)Satellites);
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)HDOP, 2, 1);
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_SignDec(NMEA+Len, Altitude, 3, 1, 1);
+     NMEA[Len++]=',';
+     NMEA[Len++]='M';
+     NMEA[Len++]=',';
+     if(isValid()) Len+=Format_SignDec(NMEA+Len, (int32_t)GeoidSeparation, 3, 1, 1);
+     NMEA[Len++]=',';
+     NMEA[Len++]='M';
+     NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     Len += NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0; return Len; }
 
    int8_t ReadGGA(const char *GGA)
    { if( (memcmp(GGA, "$GPGGA", 6)!=0) && (memcmp(GGA, "$GNGGA", 6)!=0) ) return -1;                                           // check if the right sequence
@@ -1382,14 +1447,22 @@ class GPS_Position: public GPS_Time
      Report.setHeading((HeadAngle+0x80)>>8);                                // [8-bit cordic]
      Report.setMiscInd(0x2);                                                //
      Report.setSpeed((SpeedKts+5)/10);                                      // [knot]
-     Report.setClimbRate(6*MetersToFeet(ClimbRate));
-   }
+     Report.setClimbRate(6*MetersToFeet(ClimbRate)); }
+
+   void Encode(GDL90_GEOMALT &GeomAlt) const
+   { GeomAlt.Clear();
+     int32_t Alt = MetersToFeet(Altitude+GeoidSeparation);                 // [0.1feet]
+     GeomAlt.setAltitude((Alt+25)/50);                                     // [5feet]
+     GeomAlt.setFOM((HDOP*3+5)/10); }                                      // [m]
 
   void Encode(ADSL_Packet &Packet) const
   { Packet.setAlt((Altitude+GeoidSeparation+5)/10);
     Packet.setLatOGN(Latitude);
     Packet.setLonOGN(Longitude);
-    Packet.TimeStamp = (Sec*4+mSec/250)&0x3F;
+    uint8_t TimeStamp = Sec%15;
+    TimeStamp <<= 2;
+    TimeStamp += mSec/250;
+    Packet.TimeStamp = TimeStamp; // (Sec*4+mSec/250)&0x3F;
     Packet.setSpeed(((uint32_t)Speed*4+5)/10);
     Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
     // if(hasClimb) Packet.setClimb(((int32_t)ClimbRate*8+5)/10);
