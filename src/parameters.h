@@ -77,7 +77,7 @@ class FlashParameters
        uint8_t  NavMode:3;   // GPS navigation mode/model
        uint8_t  Verbose:2;   //
        uint8_t  NavRate:3;   // [Hz] GPS position report rate
-        int8_t TimeCorr:3;   // [sec] it appears for ArduPilot you need to correct time by 3 seconds which is likley the leap-second issue
+        int8_t TimeCorr:3;   // [sec] it appears for ArduPilot you need to correct time by 3 seconds which is likely the leap-second issue
      } ;
    } ;                       //
 

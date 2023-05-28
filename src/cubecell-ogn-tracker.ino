@@ -15,6 +15,8 @@
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
 
+#include <EEPROM.h>
+
 // #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
 
@@ -435,6 +437,15 @@ static void OLED_ON(void)
 static void OLED_OFF(void)
 { if(!OLED_isON) return;
   Display.sleep(); OLED_isON=0; }
+
+
+static void OLED_ConfirmPowerON(void)                                     // 
+{ Display.clear();
+  Display.setFont(ArialMT_Plain_16);
+  Display.setTextAlignment(TEXT_ALIGN_CENTER);
+  Display.drawString(64, 16, "Confirm");
+  Display.drawString(64, 32, "Power-ON");
+  Display.display(); }
 
 static void OLED_Logo(void)                                               // display the logo page
 { Display.clear();
@@ -1050,11 +1061,25 @@ static void Button_ChangeInt(void)  // called by hardware interrupt on button pu
 
 // ===============================================================================================
 
+static bool getPowerON(void) { return EEPROM.read(511)==0x5A; }
+static void setPowerON(void) { EEPROM.write(511, 0x5A); }
+static void clrPowerON(void) { EEPROM.write(511, 0xFF); }
+
+static void SleepBack(void)                        // go back to deep sleep after an unconfirmed power-on
+{ OLED_OFF();                                      // stop OLED
+  Display.stop();
+  LED_OFF();                                       // stop RGB LED
+  Wire.end();                                      // stop I2C
+  Serial.end();                                    // stop console UART
+  pinMode(Vext, ANALOG);
+  pinMode(ADC, ANALOG);
+#ifdef WITH_DEBUGPIN
+  pinMode(DebugPin, ANALOG);
+#endif
+  while(1) lowPowerHandler(); }                     // never wake up
+
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
-
-  innerWdtEnable(true);                    // turn on the WDT, can be feed by feedInnerWdt(), has 2.4ssec timeout
-                                           // but how to turn it off when going to deep for power-off ?
 
   Random.Word ^= getUniqueID();
 
@@ -1063,7 +1088,13 @@ void setup()
 #ifdef WITH_DEBUGPIN
   DebugPin_Init();
 #endif
+
   ReadBatteryVoltage();
+
+  Serial.begin(Parameters.CONbaud);       // Start console/debug UART
+  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
+  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
+  // while (!Serial) { }                  // wait for USB serial port to connect
 
   Parameters.ReadFromFlash();             // read parameters from Flash
 #ifdef HARD_NAME
@@ -1074,16 +1105,6 @@ void setup()
 #endif
   // Parameters.WriteToFlash();
 
-  Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
-  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
-  // while (!Serial) { }                  // wait for USB serial port to connect
-
-  Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
-
-  pinMode(USER_KEY, INPUT_PULLUP);        // push button
-  attachInterrupt(USER_KEY, Button_ChangeInt, CHANGE);
-
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
   Pixels.setBrightness(0x20);
@@ -1091,10 +1112,28 @@ void setup()
   // Pixels.setPixelColor( 0, 255, 0, 0, 0); // Green
   // Pixels.show();
 
+  pinMode(USER_KEY, INPUT_PULLUP);        // push button
+
   // OLED_ON();
   Display.init();                                     // Start the OLED
   OLED_isON=1;
+  EEPROM.begin(512);
+  if(!getPowerON())
+  { OLED_ConfirmPowerON();
+    int Time=1000; int Push=0;
+    for( ; Time>0; Time--)
+    { delay(1); Push+=digitalRead(USER_KEY)==0;
+      if(Push>100) break; }
+    if(Time==0) SleepBack();
+           else setPowerON(); }
   OLED_Logo();
+
+  innerWdtEnable(true);                    // turn on the WDT, can be feed by feedInnerWdt(), has 2.4ssec timeout
+                                           // but how to turn it off when going to deep for power-off ?
+
+  attachInterrupt(USER_KEY, Button_ChangeInt, CHANGE);
+
+  Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
 
 #ifdef WITH_BME280
   BME280_Init();
@@ -1336,7 +1375,7 @@ void loop()
 { CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
 
   Button_Process();                                               // check for button short/long press
-  if(Button_LowPower) { Sleep(); return; }
+  if(Button_LowPower) { clrPowerON(); Sleep(); return; }
 
   Radio_RxProcess();                                              // process received packets, if any
 
