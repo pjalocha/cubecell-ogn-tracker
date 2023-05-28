@@ -15,7 +15,7 @@
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
 
-#include <EEPROM.h>
+// #include <EEPROM.h>        // there is no real EEPROM: it is emulated by the flash
 
 // #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
@@ -88,7 +88,8 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "OGN-CC"
-#define SOFT_NAME "2023.02.14"
+// #define SOFT_NAME "2023.05.28"
+#define SOFT_NAME "v0.1.4"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -443,8 +444,8 @@ static void OLED_ConfirmPowerON(void)                                     //
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
   Display.setTextAlignment(TEXT_ALIGN_CENTER);
-  Display.drawString(64, 16, "Confirm");
-  Display.drawString(64, 32, "Power-ON");
+  Display.drawString(64, 12, "Confirm");
+  Display.drawString(64, 36, "Power-ON");
   Display.display(); }
 
 static void OLED_Logo(void)                                               // display the logo page
@@ -464,6 +465,7 @@ static void OLED_Logo(void)                                               // dis
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   Display.drawString( 0,  0, "Mini-OGN");
 
+  Display.setFont(ArialMT_Plain_10);
   Parameters.Print(Line); Line[10]=0;
   Display.drawString( 0, 16, Line);
 #ifdef SOFT_NAME
@@ -1061,9 +1063,9 @@ static void Button_ChangeInt(void)  // called by hardware interrupt on button pu
 
 // ===============================================================================================
 
-static bool getPowerON(void) { return EEPROM.read(511)==0x5A; }
-static void setPowerON(void) { EEPROM.write(511, 0x5A); }
-static void clrPowerON(void) { EEPROM.write(511, 0xFF); }
+// static bool getPowerON(void) { return EEPROM.read(511)==0x5A; }
+// static void setPowerON(void) { EEPROM.write(511, 0x5A); }
+// static void clrPowerON(void) { EEPROM.write(511, 0xFF); }
 
 static void SleepBack(void)                        // go back to deep sleep after an unconfirmed power-on
 { OLED_OFF();                                      // stop OLED
@@ -1076,7 +1078,7 @@ static void SleepBack(void)                        // go back to deep sleep afte
 #ifdef WITH_DEBUGPIN
   pinMode(DebugPin, ANALOG);
 #endif
-  while(1) lowPowerHandler(); }                     // never wake up
+  while(1) lowPowerHandler(); }                    // never wake up
 
 void setup()
 { // delay(2000); // prevents USB driver crash on startup, do not omit this
@@ -1103,7 +1105,6 @@ void setup()
 #ifdef SOFT_NAME
   strcpy(Parameters.Soft, SOFT_NAME);
 #endif
-  // Parameters.WriteToFlash();
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
@@ -1117,15 +1118,16 @@ void setup()
   // OLED_ON();
   Display.init();                                     // Start the OLED
   OLED_isON=1;
-  EEPROM.begin(512);
-  if(!getPowerON())
+  // EEPROM.begin(512);
+  if(!Parameters.PowerON)
   { OLED_ConfirmPowerON();
-    int Time=1000; int Push=0;
+    int Time=2000; int Push=0;
     for( ; Time>0; Time--)
     { delay(1); Push+=digitalRead(USER_KEY)==0;
       if(Push>100) break; }
     if(Time==0) SleepBack();
-           else setPowerON(); }
+           else { Parameters.PowerON=1; Parameters.WriteToFlash(); }
+  }
   OLED_Logo();
 
   innerWdtEnable(true);                    // turn on the WDT, can be feed by feedInnerWdt(), has 2.4ssec timeout
@@ -1375,7 +1377,7 @@ void loop()
 { CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
 
   Button_Process();                                               // check for button short/long press
-  if(Button_LowPower) { clrPowerON(); Sleep(); return; }
+  if(Button_LowPower) { Parameters.PowerON=0; Parameters.WriteToFlash(); Sleep(); return; }
 
   Radio_RxProcess();                                              // process received packets, if any
 
