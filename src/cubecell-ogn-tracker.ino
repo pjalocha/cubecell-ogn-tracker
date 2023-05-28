@@ -1037,8 +1037,8 @@ static void Button_Process(void)                    // process the button push/r
   uint32_t Diff = SysTime-Button_PrevSysTime;
   if(Button_ShortPush==0)
   { Button_IdleTime+=Diff;                          // count idle time
-    if(Button_IdleTime>60000) Button_IdleTime=60000; // [ms] top it at 60 sec
-    if(Button_IdleTime>=20000) OLED_OFF(); }        // turn off OLED when idle more than 20sec
+    if(Button_IdleTime>100000) Button_IdleTime=100000; // [ms] top it at 100 sec
+    if(Button_IdleTime>=60000) OLED_OFF(); }        // turn off OLED when idle more than 60sec
   while(Button_ShortPush)
   { if(OLED_isON) OLED_NextPage();                  // either switch OLED page
              else OLED_ON();                        // or turn the OLED back ON
@@ -1062,10 +1062,6 @@ static void Button_ChangeInt(void)  // called by hardware interrupt on button pu
 }
 
 // ===============================================================================================
-
-// static bool getPowerON(void) { return EEPROM.read(511)==0x5A; }
-// static void setPowerON(void) { EEPROM.write(511, 0x5A); }
-// static void clrPowerON(void) { EEPROM.write(511, 0xFF); }
 
 static void SleepBack(void)                        // go back to deep sleep after an unconfirmed power-on
 { OLED_OFF();                                      // stop OLED
