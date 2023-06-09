@@ -1089,18 +1089,19 @@ void setup()
 
   ReadBatteryVoltage();
 
-  Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
-  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
-  // while (!Serial) { }                  // wait for USB serial port to connect
-
-  Parameters.ReadFromFlash();             // read parameters from Flash
+  int8_t Err=Parameters.ReadFromFlash();     // read parameters from Flash
+  if(Err<0) { Parameters.setDefault(); Parameters.WriteToFlash(); }
 #ifdef HARD_NAME
   strcpy(Parameters.Hard, HARD_NAME);
 #endif
 #ifdef SOFT_NAME
   strcpy(Parameters.Soft, SOFT_NAME);
 #endif
+
+  Serial.begin(Parameters.CONbaud);       // Start console/debug UART
+  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
+  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
+  // while (!Serial) { }                  // wait for USB serial port to connect
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
