@@ -89,7 +89,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "v0.1.4"
+#define SOFT_NAME "v0.1.5"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -171,11 +171,11 @@ static uint8_t BMP280_Addr = 0x00;
 
 static void BMP280_Init(void)
 { for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
-  { if(BMP280.begin(0x76, &Wire)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
+  { if(BMP280.begin(0x76)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
     Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
 }
 
-static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
+static void BMP280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
 { if(BMP280_Addr==0) return;
   float Temp  = BMP280.readTemperature();        // [degC]
   GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
@@ -1225,6 +1225,12 @@ static void StartRFslot(void)                                     // start the T
   RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
   RX_OGN_Packets=0;                                                           // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
+#ifdef WITH_BME280
+  BME280_Read(GPS);
+#endif
+#ifdef WITH_BMP280
+  BMP280_Read(GPS);
+#endif
   bool TxPos=0;
 #ifdef WITH_FANET
   FNT_Freq=0;
