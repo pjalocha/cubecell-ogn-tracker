@@ -722,7 +722,8 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
 // static uint8_t FNT_Seq = 0x00; // to search for correct sync word
 
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
-{ Packet.setAddress(Parameters.Address);
+{ if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
+  Packet.setAddress(Parameters.Address);
   // char Seq[20]; sprintf(Seq, "Sync:%02X", FNT_Seq);
   // Serial.println(Seq);
   // Packet.setName(Seq);
@@ -1243,9 +1244,9 @@ static void StartRFslot(void)                                     // start the T
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_FANET
-    getFNTpacket(FNT_TxPacket, GPS);                           // produce FANET position packet
-    if(FNT_BackOff) FNT_BackOff--;
-    else FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);
+    if(getFNTpacket(FNT_TxPacket, GPS))                       // produce FANET position packet
+    { if(FNT_BackOff) FNT_BackOff--;                          // if successful (within altitude limit)
+      else FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC); }
 /*
     if(FNT_Freq)
     { // Serial.println("FNT:Tx");
@@ -1272,9 +1273,9 @@ static void StartRFslot(void)                                     // start the T
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_PAW
-    PAW_TxPacket.Copy(TxPosPacket.Packet);                    // convert OGN to PAW
-    if(PAW_BackOff) PAW_BackOff--;
-    else PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC);
+    if(PAW_TxPacket.Copy(TxPosPacket.Packet))                 // convert OGN to PAW
+    { if(PAW_BackOff) PAW_BackOff--;
+      else PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC); }
 #endif
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
