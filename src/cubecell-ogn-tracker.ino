@@ -1407,13 +1407,16 @@ void loop()
       if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
       { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
       else
-      { if(PAW_Freq)
+      {
+#ifdef WITH_PAW
+        if(PAW_Freq)
         { PAW_TxConfig();
           Radio.SetChannel(PAW_Freq);
           PAW_Transmit(PAW_TxPacket);
           PAW_BackOff = 3 + Random.RX%3;
           PAW_Freq=0; }
         else
+#endif
         { TxLen=OGN_Transmit(*TxPkt0); }
       }
 // #endif
@@ -1439,13 +1442,16 @@ void loop()
       if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
       { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
       else
-      { if(FNT_Freq)
+      {
+#ifdef WITH_FANET
+        if(FNT_Freq)
         { FNT_TxConfig();
           Radio.SetChannel(FNT_Freq);
           Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
           FNT_BackOff = 9 + Random.RX%3;
           FNT_Freq=0; }
         else
+#endif
         { TxLen=OGN_Transmit(*TxPkt1); }
       }
 // #endif
