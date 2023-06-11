@@ -421,10 +421,12 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   GPS_Random_Update(Pos.Longitude);
   XorShift64(Random.Word); }
 
-// seems not to work
-// static void GPS_HardPPS(void)       // called by hardware interrupt on PPS
-// { uint32_t msTime = millis()-GPS_PPS_ms;
-//   Serial.printf("PPS: %4d\n", msTime); }
+static bool GPS_readPPS(void) { return digitalRead(GPIO12); } // tell if PPS line of the GPS is HIGH
+
+static void GPS_HardPPS(void)       // called by hardware interrupt on PPS
+{ // uint32_t msTime = millis()-GPS_PPS_ms;
+  // Serial.printf("PPS: %4d\n", msTime);
+}
 
 // ===============================================================================================
 // OLED pages
@@ -977,7 +979,7 @@ static int PAW_Transmit(const PAW_Packet &TxPacket)
 
 static void Sleep(void)                            // shut-down all hardware and go to deep sleep
 { detachInterrupt(USER_KEY);                       // stop user-button interrupt
-  // detachInterrupt(GPIO11);                         // stop GPS PPS interrupt
+  // detachInterrupt(GPIO12);                         // stop GPS PPS interrupt
   OLED_ON();
   OLED_Logo();                                     // display logo (for a short time)
   GPS.end();                                       // stop the GPS
@@ -1143,8 +1145,8 @@ void setup()
 #endif
 
   GPS.begin(GPS_BaudRate);
-  // pinMode(GPIO11, INPUT);                            // GPS PPS ?
-  // attachInterrupt(GPIO11, GPS_HardPPS, RISING);
+  pinMode(GPIO12, INPUT);                            // GPS PPS and/or LED
+  // attachInterrupt(GPIO12, GPS_HardPPS, RISING);      //
 
   // Serial.println("GPS started");
   Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
