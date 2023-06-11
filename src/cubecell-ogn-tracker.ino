@@ -107,9 +107,9 @@ static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every
 static uint8_t  BattCapacity = 0;        // [ %]
 
 static uint8_t calcBattCapacity(uint16_t mVolt)
-{ if(mVolt>=4050) return 100;                                 // 4.05V or above => full capacity
-  if(mVolt<=3550) return   0;                                 // 3.55V or below => zero capacity
-  return (mVolt-3550+2)/5; }                                  // linear dependence (simplified)
+{ if(mVolt>=4100) return 100;                                 // 4.10V or above => full capacity
+  if(mVolt<=3500) return   0;                                 // 3.50V or below => zero capacity
+  return (mVolt-3500+3)/6; }                                  // linear interpolation (simplified)
 
 // static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
@@ -421,7 +421,7 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   GPS_Random_Update(Pos.Longitude);
   XorShift64(Random.Word); }
 
-static bool GPS_readPPS(void) { return digitalRead(GPIO12); } // tell if PPS line of the GPS is HIGH
+static bool GPS_ReadPPS(void) { return digitalRead(GPIO12); } // tell if PPS line of the GPS is HIGH
 
 static void GPS_HardPPS(void)       // called by hardware interrupt on PPS
 { // uint32_t msTime = millis()-GPS_PPS_ms;
@@ -1379,9 +1379,35 @@ static void StartRFslot(void)                                     // start the T
   LED_OFF();
 }
 
+static void PPS_SoftEdge(uint32_t msTime, uint32_t msDelay)
+{ uint32_t msDiff = msTime-GPS_PPS_ms; if(msDiff<=800) return;
+  GPS_PPS_UTC++; GPS_PPS_ms=msTime-msDelay;
+  // printf("SoftPPS: %10d:%10d\r\n", GPS_PPS_UTC, GPS_PPS_ms);
+}
+
+static void PPS_HardEdge(uint32_t msTime)
+{ GPS_PPS_UTC++; GPS_PPS_ms=msTime;
+  // printf("HardPPS: %10d:%10d\r\n", GPS_PPS_UTC, GPS_PPS_ms);
+}
+
+static void PPS_Process(void)
+{ static bool PrevPPS=0;
+  static uint32_t PrevTime=0;
+  bool PPS = GPS_ReadPPS();
+  if(PPS!=PrevPPS)
+  { if(PPS)
+    { uint32_t Time=millis();
+      uint32_t DiffTime = Time-PrevTime;
+      // Serial.printf("PPS: %4d\n", DiffTime);
+      if(DiffTime>=990 && DiffTime<=1010) PPS_HardEdge(Time);
+      PrevTime=Time; }
+    PrevPPS=PPS; }
+}
+
 void loop()
 { CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
 
+  PPS_Process();
   Button_Process();                                               // check for button short/long press
   if(Button_LowPower) { Parameters.PowerON=0; Parameters.WriteToFlash(); Sleep(); return; }
 
@@ -1390,12 +1416,14 @@ void loop()
   CONS_Proc();                                                    // process input from the console
   if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS
                   else { GPS_Idle=0; RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++; } // [0.5dBm]
-  if(GPS_State.BurstDone)                                                    // if state is GPS not sending data
+  if(GPS_State.BurstDone)                                         // if state is GPS not sending data
   { if(GPS_Idle<2)                                                // GPS (re)started sending data
-    { GPS_State.BurstDone=0;                                                 // change the state to GPS is sending data
-      GPS_PPS_ms = millis()-(GPS_State.FixValid?50:30); // Parameters.PPSdelay;                // record the est. PPS time
+    { GPS_State.BurstDone=0;                                      // change the state to GPS is sending data
+      PPS_SoftEdge(millis(), GPS_State.FixValid?50:30);
+      // GPS_PPS_ms = millis()-(GPS_State.FixValid?50:30); // Parameters.PPSdelay;                // record the est. PPS time
       // printf("GPS slot: start: %d [ms]\n\r", millis());
-      GPS_PPS_UTC++; }
+      // GPS_PPS_UTC++;
+    }
   }
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
