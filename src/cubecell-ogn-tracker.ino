@@ -2,10 +2,14 @@
 
 // the following options do not work correctly yet in this code
 #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
-#define WITH_FANET
-#define WITH_PAW
+#define WITH_FANET // only up to 8000m altitude
+#define WITH_PAW   // only up to 4000m alttude
+
+// use either WITH_BMP280 or WITH_BME280 but not both at the same time
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+
+#define WITH_GPS_CONS // send the GPS NMEA to the console
 
 #include "Arduino.h"
 #include <Wire.h>
@@ -402,7 +406,9 @@ static int GPS_Process(void)                           // process serial data st
         // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); } // copy to the console, but this does not work, characters are being lost
       }
       GpsNMEA.Clear(); }
-    // Serial.write(Byte);                                // copy character to the console (no loss of characters here)
+#ifdef WITH_GPS_CONS
+    Serial.write(Byte);                                // copy character to the console (no loss of characters here)
+#endif
     Count++; }                                         // count processed characters
   return Count; }                                      // return number of processed characters
 
@@ -699,18 +705,18 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
 { Packet.HeaderWord = 0;
   Packet.Header.Address = Parameters.Address;                          // aircraft address
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
-  Packet.Header.NonPos = 1;
+  Packet.Header.NonPos = 1;                                            // this is not a position packet
   Packet.calcAddrParity();
   Packet.Status.Hardware=HARDWARE_ID;
   Packet.Status.Firmware=SOFTWARE_ID;
-  GPS.EncodeStatus(Packet);
-  uint8_t SatSNR = (GPS_SatSNR+2)/4;                            // encode number of satellites and SNR in the Status packet
+  Packet.clrTemperature();                                             // we have no temperature sensor other than the pressure sensor
+  GPS.EncodeStatus(Packet);                                            // encode altitude and possibly pressure/temperature
+  uint8_t SatSNR = (GPS_SatSNR+2)/4;                                   // encode number of satellites and SNR in the Status packet
   if(SatSNR>8) { SatSNR-=8; if(SatSNR>31) SatSNR=31; }
           else { SatSNR=0; }
   Packet.Status.SatSNR = SatSNR;
-  Packet.clrTemperature();
-  Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);              // [1/64V]
-  Packet.Status.RadioNoise = -RX_RSSI.getOutput();              // [-0.5dBm]
+  Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);                     // [1/64V]
+  Packet.Status.RadioNoise = -RX_RSSI.getOutput();                     // [-0.5dBm]
   uint16_t RxRate = RX_OGN_Count64+1;
   uint8_t RxRateLog2=0; RxRate>>=1; while(RxRate) { RxRate>>=1; RxRateLog2++; }
   Packet.Status.RxRate = RxRateLog2;
@@ -1347,7 +1353,7 @@ static void StartRFslot(void)                                     // start the T
     { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
       if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;                // put it randomly into 1st or 2nd time slot
                     else TxPkt0 = &TxInfoPacket;
-      InfoTxBackOff = 15 + (Random.RX%3);
+      InfoTxBackOff = 15 + (Random.RX%3);                       // 16+/-1
     }
   }
   XorShift64(Random.Word);
