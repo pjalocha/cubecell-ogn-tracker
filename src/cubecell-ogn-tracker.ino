@@ -39,7 +39,7 @@
 
 #include "fifo.h"
 #include "lowpass2.h"
-#include "atmosphere.h"
+// #include "atmosphere.h"
 #include "format.h"
 #include "nmea.h"
 #include "manchester.h"
@@ -162,7 +162,8 @@ static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperatur
   GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
   float Press = BME280.readPressure();           // [Pa]
   GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
-  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.StdAltitude = floor(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1;
   float Hum   = BME280.readHumidity();           // [%]
   GPS.Humidity    = floor(Hum*10+0.5);           // [0.1 %]
@@ -185,7 +186,8 @@ static void BMP280_Read(GPS_Position &GPS)       // read the pressure/temperatur
   GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
   float Press = BMP280.readPressure();           // [Pa]
   GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
-  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.StdAltitude = floor(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1; }
 #endif
 
