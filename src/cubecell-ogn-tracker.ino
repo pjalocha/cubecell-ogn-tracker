@@ -159,14 +159,14 @@ static void BME280_Init(void)
 static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
 { if(BME280_Addr==0) return;
   float Temp  = BME280.readTemperature();        // [degC]
-  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  GPS.Temperature = floorf(Temp*10+0.5);         // [0.1 degC]
   float Press = BME280.readPressure();           // [Pa]
-  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
+  GPS.Pressure    = floorf(Press*4+0.5);         // [1/4 Pa]
   // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
-  GPS.StdAltitude = floor(BaroAlt(Press)*10+0.5);
+  GPS.StdAltitude = floorf(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1;
   float Hum   = BME280.readHumidity();           // [%]
-  GPS.Humidity    = floor(Hum*10+0.5);           // [0.1 %]
+  GPS.Humidity    = floorf(Hum*10+0.5);           // [0.1 %]
   GPS.hasHum=1; }
 #endif
 
@@ -183,11 +183,11 @@ static void BMP280_Init(void)
 static void BMP280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
 { if(BMP280_Addr==0) return;
   float Temp  = BMP280.readTemperature();        // [degC]
-  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  GPS.Temperature = floorf(Temp*10+0.5);          // [0.1 degC]
   float Press = BMP280.readPressure();           // [Pa]
-  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
+  GPS.Pressure    = floorf(Press*4+0.5);          // [1/4 Pa]
   // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
-  GPS.StdAltitude = floor(BaroAlt(Press)*10+0.5);
+  GPS.StdAltitude = floorf(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1; }
 #endif
 
