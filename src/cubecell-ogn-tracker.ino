@@ -1,13 +1,13 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
 // the following options do not work correctly yet in this code
-#define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+// #define WITH_ADSL  // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
 #define WITH_FANET // only up to 8000m altitude
 #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
-// #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+#define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
 
 #define WITH_GPS_CONS // send the GPS NMEA to the console
 
@@ -48,9 +48,9 @@
 #include "freqplan.h"
 #include "rfm.h"
 
-// #ifdef WITH_ADSL
+#ifdef WITH_ADSL
 #include "adsl.h"
-// #endif
+#endif
 #ifdef WITH_PAW
 #include "paw.h"
 #endif
@@ -93,7 +93,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "v0.1.5"
+#define SOFT_NAME "v0.1.6"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -449,7 +449,6 @@ static void OLED_OFF(void)
 { if(!OLED_isON) return;
   Display.sleep(); OLED_isON=0; }
 
-
 static void OLED_ConfirmPowerON(void)                                     // 
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
@@ -506,44 +505,34 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
                                    "SkyD", "Drop", "Hang", "Para",
                                    "Pwrd", "Jet ", "UFO", "Ball",
                                    "Zepp", "UAV", "Car ", "Fix " } ;
-
   Display.clear();
-  // Display.setFont(ArialMT_Plain_16);
   Display.setFont(ArialMT_Plain_10);
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   uint8_t VertPos=0;
   for( uint8_t Idx=0; Idx<RelayQueueSize; Idx++)
   { OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
     if(Packet->Packet.Header.NonPos) continue;                     // don't show non-position packets
-    // int32_t LatDist, LonDist;
-    // if(Packet->Packet.calcDistanceVector(LatDist, LonDist, GPS.Latitude, GPS.Longitude, GPS.LatitudeCosine, 20000)<0) continue;
     uint32_t Dist= IntDistance(Packet->LatDist, Packet->LonDist);      // [m]
     uint32_t Dir = IntAtan2(Packet->LonDist, Packet->LatDist);         // [16-bit cyclic]
     Dir &= 0xFFFF; Dir = (Dir*360)>>16;                                // [deg]
     uint8_t Len=0;
     Len+=Format_String(Line+Len, AcftTypeName[Packet->Packet.Position.AcftType]);
-    // Line[Len++]=HexDigit(Packet->Packet.Position.AcftType);
-    // Line[Len++]=':';
-    // Line[Len++]='0'+Packet->Packet.Header.AddrType;                // address-type
-    // Line[Len++]=':';
-    // Len+=Format_Hex(Line+Len, Packet->Packet.Header.Address, 6);   // address
     Line[Len++]=' ';
-    // Len+=Format_SignDec(Line+Len, -(int16_t)Packet->RxRSSI/2);     // [dBm] RSSI
-    // Len+=Format_String(Line+Len, "dBm ");
-    // Len+=Format_Hex(Line+Len, Packet->Rank);                       // rank for relay
-    // Line[Len++]=' ';
-    // Line[Len++]=':';
     Len+=Format_UnsDec(Line+Len, (uint32_t)Packet->Packet.DecodeAltitude()); // [m] altitude
     Line[Len++]='m'; Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, Dir, 3);                             // [deg] direction to target
     Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, (Dist+50)/100, 2, 1);                // [km] distance to target
-    // Len+=Format_UnsDec(Line+Len, Packet->Packet.Position.Time, 2); // [sec] timestamp
     Len+=Format_String(Line+Len, "km");
     Line[Len]=0;
     Display.drawString(0, VertPos, Line);
-    VertPos+=10; if(VertPos>=64) break;
-  }
+    VertPos+=10; if(VertPos>=64) break; }
+  if(VertPos==0)
+  { Display.setFont(ArialMT_Plain_16);
+    Display.setTextAlignment(TEXT_ALIGN_LEFT);
+    uint8_t Len=Format_String(Line, "No relay cand.");
+    Line[Len]=0;
+    Display.drawString(0, 0, Line); }
   Display.display(); }
 
 static void OLED_GPS(const GPS_Position &GPS)                 // display time, date and GPS data/status
@@ -605,6 +594,54 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
     Display.drawString(128, 48, Line); }
   Display.display(); }
 
+static void OLED_Baro(const GPS_Position &GPS)                 // display pressure sensor info and data
+{ Display.clear();
+  Display.setFont(ArialMT_Plain_16);
+
+  uint8_t Len=Format_String(Line, "No baro sensor");
+  bool hasBaro=0;
+#ifdef WITH_BMP280
+  if(BMP280_Addr) { Len=Format_String(Line, "BMP280 "); hasBaro=1; }
+#endif
+#ifdef WITH_BME280
+  if(BME280_Addr) { Len=Format_String(Line, "BME280 "); hasBaro=1; }
+#endif
+  if(hasBaro)
+  { if(GPS.hasBaro)
+    { Len+=Format_UnsDec(Line+Len, GPS.Pressure/4, 5, 2);
+      Len+=Format_String(Line+Len, "hPa "); }
+    else Len+=Format_String(Line+Len, "----.--hPa ");
+  }
+  Line[Len]=0;
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  Display.drawString(0, 0, Line);
+#if defined(WITH_BMP280) || defined(WITH_BME280)
+  if(hasBaro)
+  { Len=0;
+    if(GPS.hasBaro)
+    { Len+=Format_SignDec(Line+Len, (int32_t)GPS.StdAltitude, 5, 1);
+      Len+=Format_String(Line+Len, "m ");
+      Len+=Format_SignDec(Line+Len, (int32_t)GPS.ClimbRate, 2, 1);
+      Len+=Format_String(Line+Len, "m/s "); }
+    else Len+=Format_String(Line+Len, "-----.-m  --.-m/s ");
+    Line[Len]=0;
+    Display.drawString(0, 16, Line);
+    Len=0;
+    if(GPS.hasBaro)
+    { Len+=Format_SignDec(Line+Len, (int32_t)GPS.Temperature, 2, 1);
+      Line[Len++]=0xB0;
+      Line[Len++]='C';
+      Line[Len++]=' ';
+      if(GPS.hasHum)
+      { Len+=Format_SignDec(Line+Len, (int32_t)GPS.Humidity, 2, 1, 1);
+        Line[Len++]='%'; Line[Len++]=' '; }
+    }
+    else Len+=Format_String(Line+Len, "---.- C --.-% ");
+    Line[Len]=0;
+    Display.drawString(0, 32, Line); }
+#endif
+  Display.display(); }
+
 static void OLED_RF(void)                 // display RF-related data
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
@@ -649,18 +686,20 @@ static void OLED_RF(void)                 // display RF-related data
 
   Display.display(); }
 
+const  int OLED_Pages    = 5;
 static int OLED_CurrPage = 0;
 
 static void OLED_NextPage(void)
 { OLED_CurrPage++;
-  if(OLED_CurrPage>=4) OLED_CurrPage=0; }
+  if(OLED_CurrPage>=OLED_Pages) OLED_CurrPage=0; }
 
 static void OLED_DispPage(const GPS_Position &GPS)
 { if(!OLED_isON) return;
   switch(OLED_CurrPage)
   { case 2: OLED_Info(); break;
     case 1: OLED_RF(); break;
-    case 3: OLED_Relay(GPS); break;
+    case 3: OLED_Baro(GPS); break;
+    case 4: OLED_Relay(GPS); break;
     default: OLED_GPS(GPS); }
 }
 
@@ -751,6 +790,7 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode
   GPS.Encode(Packet);
   return 1; }
 
+#ifdef WITH_ADSL
 static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce position ADS-L packet
 { Packet.Init();
   Packet.setAddress    (Parameters.Address);
@@ -759,6 +799,7 @@ static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produ
   Packet.setAcftTypeOGN(Parameters.AcftType);
   GPS.Encode(Packet);
   return 1; }
+#endif
 
 // ===============================================================================================
 // Radio
@@ -899,9 +940,11 @@ static void OGN_TxConfig(void)
   // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
   Radio_UpdateConfig(OGN1_SYNC, 8); }
 
+#ifdef WITH_ADSL
 static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
+#endif
 
 #ifdef WITH_PAW
 static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-9.6kHz, 38400bps, long preamble
@@ -933,9 +976,11 @@ static void OGN_RxConfig(void)
   // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
   Radio_UpdateConfig(OGN1_SYNC+1, 7); }
 
+#ifdef WITH_ADSL
 static void ADSL_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true); // same as OGN just different packet size
   Radio_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
+#endif
 
 // Manchester encode packet data
 static int Manchester(uint8_t *TxData, const uint8_t *PktData, int PktLen)
@@ -963,12 +1008,12 @@ static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign
 { OGN_TxConfig();
   return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
-// #ifdef WITH_ADSL
+#ifdef WITH_ADSL
 // transmit ADS-L packet with possible signature
 static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
 { ADSL_TxConfig();
   return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
-// #endif
+#endif
 
 #ifdef WITH_PAW
 // transmit PilotAWare packet
@@ -1192,8 +1237,9 @@ void setup()
 }
 
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket; // OGN position, status and info packets
+#ifdef WITH_ADSL
 static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
-
+#endif
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
 
@@ -1202,9 +1248,10 @@ static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1; // OGN packets to transmit in the 1st and 2nd sub-slot
 static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signature corresponds to
+#ifdef WITH_ADSL
 static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
 static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
-
+#endif
 #ifdef WITH_FANET
 static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
 static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
@@ -1448,9 +1495,11 @@ void loop()
 //       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
 //                                             else TxLen=OGN_Transmit(*TxPkt0);
 // #else
+#ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
       { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
       else
+#endif
       {
 #ifdef WITH_PAW
         if(PAW_Freq)
@@ -1483,9 +1532,11 @@ void loop()
 //       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
 //                                             else TxLen=OGN_Transmit(*TxPkt1);
 // #else
+#ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
       { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
       else
+#endif
       {
 #ifdef WITH_FANET
         if(FNT_Freq)
