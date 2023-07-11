@@ -6,7 +6,7 @@
 // #include "radiodemod.h"
 // #include "intmath.h"
 #include "ognconv.h"
-// #include "bitcount.h"
+#include "bitcount.h"
 // #include "format.h"
 // #include "crc1021.h"
 

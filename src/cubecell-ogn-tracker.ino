@@ -7,7 +7,7 @@
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
-#define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
+// #define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
 
 #define WITH_GPS_CONS // send the GPS NMEA to the console
 
@@ -99,7 +99,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define DEFAULT_GeoidSepar     40         // [m]
 #define DEFAULT_CONbaud    115200         // [bps]
 #define DEFAULT_PPSdelay       50         // [ms]
-#define DEFAULT_FreqPlan        1
+#define DEFAULT_FreqPlan        0
 
 #include "parameters.h"
 
@@ -247,13 +247,13 @@ static int RNG(uint8_t *Data, unsigned Size)
 // ===============================================================================================
 // CONSole UART
 
-void CONS_UART_Write(char Byte) // write byte to the console (USB serial port)
+static void CONS_UART_Write(char Byte) // write byte to the console (USB serial port)
 { Serial.write(Byte); }
 
-int  CONS_UART_Free(void)
+static int  CONS_UART_Free(void)
 { return Serial.availableForWrite(); }
 
-int  CONS_UART_Read (uint8_t &Byte)
+static int  CONS_UART_Read (uint8_t &Byte)
 { int Ret=Serial.read(); if(Ret<0) return 0;
   Byte=Ret; return 1; }
 
@@ -276,7 +276,7 @@ static void PrintPOGNS(void)                                   // print paramete
   Parameters.WritePOGNS_Comp(Line);
   Format_String(CONS_UART_Write, Line); }
 
-static void ConsNMEA_Process(void)                              // priocess NMEA received on the console
+static void ConsNMEA_Process(void)                              // process NMEA received on the console
 { if(!ConsNMEA.isPOGNS()) return;                               // ignore all but $POGNS
   if(ConsNMEA.hasCheck() && !ConsNMEA.isChecked() ) return;     // if CRC present then it must be correct
   if(ConsNMEA.Parms==0) { PrintPOGNS(); return; }               // if no parameters given, print the current parameters as $POGNS
@@ -1302,14 +1302,16 @@ static void StartRFslot(void)                                     // start the T
     GPS_Longitude = GPS.Longitude;
     GPS_GeoidSepar= GPS.GeoidSeparation;
     GPS_LatCosine = GPS.LatitudeCosine;
-    Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
+    if(Parameters.FreqPlan==0)
+      Radio_FreqPlan.setPlan(GPS_Latitude, GPS_Longitude);      // set Radio frequency plan
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_FANET
     if(getFNTpacket(FNT_TxPacket, GPS))                       // produce FANET position packet
     { if(FNT_BackOff) FNT_BackOff--;                          // if successful (within altitude limit)
-      else FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC); }
+      else if(Radio_FreqPlan.Plan<=1) FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);
+    }
 /*
     if(FNT_Freq)
     { // Serial.println("FNT:Tx");
@@ -1338,7 +1340,8 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_PAW
     if(PAW_TxPacket.Copy(TxPosPacket.Packet))                 // convert OGN to PAW
     { if(PAW_BackOff) PAW_BackOff--;
-      else PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC); }
+      else if(Radio_FreqPlan.Plan<=1) PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC);
+    }
 #endif
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
@@ -1348,11 +1351,13 @@ static void StartRFslot(void)                                     // start the T
     TxPosPacket.Packet.Whiten();
     TxPosPacket.calcFEC();                                    // position packet is ready for transmission
 #ifdef WITH_ADSL
-    ADSL_TxPkt = &TxPosPacket;
-    getAdslPacket(ADSL_TxPosPacket, GPS);
-    ADSL_TxPosPacket.Scramble();                              // this call hangs when -Os is used to compile
-    ADSL_TxPosPacket.setCRC();
-    ADSL_TxSlot = Random.GPS&0x20;
+    if(Radio_FreqPlan.Plan<=1)
+    { ADSL_TxPkt = &TxPosPacket;
+      getAdslPacket(ADSL_TxPosPacket, GPS);
+      ADSL_TxPosPacket.Scramble();                              // this call hangs when -Os is used to compile
+      ADSL_TxPosPacket.setCRC();
+      ADSL_TxSlot = Random.GPS&0x20; }
+    else ADSL_TxPkt=0;
 #endif
     TxPos=1; }
   // Serial.printf("StartRFslot() #1\n");
