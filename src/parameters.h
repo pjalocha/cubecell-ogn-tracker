@@ -36,7 +36,7 @@ class FlashParameters
        uint8_t  AddrType:2;  // 0=RND, 1=ICAO, 2=FLR, 3=OGN
        uint8_t  AcftType:4;  // 1=glider, 2=towplane, 3=helicopter, etc.
        bool      NoTrack:1;  // unused
-       bool      Stealth:1;  // unused
+       bool      Stealth:1;  // used for OGN packets
      } ;
    } ;
 
@@ -198,15 +198,13 @@ uint16_t StratuxPort;
 
 #ifdef WITH_LORAWAN
    bool hasAppKey(void) const
-   { uint8_t Sum=AppKey[0];
-     for(int Idx=1; Idx<16; Idx++)
-     { if(Sum!=0) break;
-       Sum|=AppKey[Idx]; }
-     return Sum!=0; }
+   { for(int Idx=0; Idx<16; Idx++)
+     { if(AppKey[Idx]) return 1; }
+     return 0; }
 
-   void clrAppKey(void) { for(int Idx=0; Idx<16; Idx++) AppKey[Idx]=0; }
-   void cpyAppKey(uint8_t *Key) { memcpy(Key, AppKey, 16); }
-   bool sameAppKey(const uint8_t *RefKey) const { return memcmp(AppKey, RefKey, 16)==0; }
+   void clrAppKey(void) { for(int Idx=0; Idx<16; Idx++) AppKey[Idx]=0x00; }                   // set AppKey to all-zero
+   void cpyAppKey(uint8_t *Key) { memcpy(Key, AppKey, 16); }                                  // copy AppKey from given pointer
+   bool sameAppKey(const uint8_t *RefKey) const { return memcmp(AppKey, RefKey, 16)==0; }     // is AppKey same as given ?
 #endif
 
    uint32_t static calcCheckSum(volatile uint32_t *Word, uint32_t Words)                      // calculate check-sum of pointed data
@@ -235,7 +233,9 @@ uint16_t StratuxPort;
 
   void setDefault(uint32_t UniqueAddr)
   { AcftID = ((uint32_t)DEFAULT_AcftType<<26) | 0x03000000 | (UniqueAddr&0x00FFFFFF);
-    RFchipFreqCorr =         0; // [0.1ppm]
+    RFchip         =         0; // this clears FreqCorr and other
+    // RFchipFreqCorr =         0; // [0.1ppm]
+    // RFchipTempCorr =         0; // [degC]
 #ifdef WITH_RFM69W
     TxPower        =        13; // [dBm] for RFM69W
     RFchipTypeHW   =         0;
@@ -269,7 +269,7 @@ uint16_t StratuxPort;
 
     FreqPlan       =    DEFAULT_FreqPlan; // [0..5]
     PPSdelay       =    DEFAULT_PPSdelay; // [ms]
-    PageMask       =    0xFF;
+    PageMask       =    0xFFFF;
     InitialPage    =       0;
     for(uint8_t Idx=0; Idx<InfoParmNum; Idx++)
       InfoParmValue(Idx)[0] = 0;
@@ -503,6 +503,9 @@ uint16_t StratuxPort;
 #ifdef WITH_SX1272
     Len+=Format_String(Line+Len, " SX1272");
 #endif
+#ifdef WITH_SX1262
+    Len+=Format_String(Line+Len, " SX1262");
+#endif
     Line[Len++]='/';
     Len+=Format_SignDec(Line+Len, (int32_t)TxPower);
     Len+=Format_String(Line+Len, "dBm");
@@ -523,6 +526,8 @@ uint16_t StratuxPort;
     Len+=Format_Hex(Line+Len, Address, 6);
     Len+=Format_String(Line+Len, ",AddrType=");
     Line[Len++]='0'+AddrType;
+    Len+=Format_String(Line+Len, ",Stealth=");
+    Line[Len++]='0'+Stealth;
     Len+=Format_String(Line+Len, ",AcftType=0x");
     Line[Len++]=HexDigit(AcftType);
     Len+=Format_String(Line+Len, ",FreqPlan=");
@@ -645,6 +650,9 @@ uint16_t StratuxPort;
     if(strcmp(Name, "AddrType")==0)
     { uint32_t Type=0; if(Read_Int(Type, Value)<=0) return 0;
       AddrType=Type; return 1; }
+    if(strcmp(Name, "Stealth")==0)
+    { uint32_t Type=0; if(Read_Int(Type, Value)<=0) return 0;
+      Stealth=Type; return 1; }
     if(strcmp(Name, "AcftType")==0)
     { uint32_t Type=0; if(Read_Int(Type, Value)<=0) return 0;
       AcftType=Type; return 1; }
@@ -685,8 +693,8 @@ uint16_t StratuxPort;
     { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
       NavMode=Mode; return 1; }
     if(strcmp(Name, "NavRate")==0)
-    { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
-      if(Mode<0) Mode=0; NavRate=Mode; return 1; }
+    { int32_t Rate=0; if(Read_Int(Rate, Value)<=0) return 0;
+      if(Rate<0) Rate=0; NavRate=Rate; return 1; }
     if(strcmp(Name, "GNSS")==0)
     { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
       GNSS=Mode; return 1; }
@@ -701,8 +709,8 @@ uint16_t StratuxPort;
       Verbose=Mode; return 1; }
 #ifdef WITH_LORAWAN
     if(strcmp(Name, "AppKey")==0)
-    { if(Value[0]=='0' && Value[1]=='x') Value+=2;
-      for(uint8_t Idx=0; Idx<16; Idx++)
+    { if(Value[0]=='0' && Value[1]=='x') Value+=2;                     // skip initial 0x if present
+      for(uint8_t Idx=0; Idx<16; Idx++)                                // read 16 hex bytes
       { uint8_t Byte;
         uint8_t Len=Read_Hex(Byte, Value);
         if(Len!=2) break;
@@ -854,8 +862,9 @@ uint16_t StratuxPort;
   int WriteToFile(FILE *File)
   { char Line[80];
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
-    Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
+    Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
+    Write_Hex    (Line, "Stealth"   ,          Stealth,        1); strcat(Line, " #  [ bool]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_UnsDec (Line, "CONbaud"   ,          CONbaud          ); strcat(Line, " #  [  bps]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "CONprot"   ,          CONprot,        1); strcat(Line, " #  [ mask]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_SignDec(Line, "TxPower"   ,          TxPower          ); strcat(Line, " #  [  dBm]\n"); if(fputs(Line, File)==EOF) return EOF;
@@ -921,8 +930,9 @@ uint16_t StratuxPort;
   void Write(void (*Output)(char))
   { char Line[80];
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); Format_String(Output, Line);
-    Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); Format_String(Output, Line);
+    Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); Format_String(Output, Line);
+    Write_Hex    (Line, "Stealth"   ,          Stealth,        1); strcat(Line, " #  [ bool]\n"); Format_String(Output, Line);
     Write_UnsDec (Line, "CONbaud"   ,          CONbaud          ); strcat(Line, " #  [  bps]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "CONprot"   ,          CONprot,        1); strcat(Line, " #  [ mask]\n"); Format_String(Output, Line);
     Write_SignDec(Line, "TxPower"   ,          TxPower          ); strcat(Line, " #  [  dBm]\n"); Format_String(Output, Line);
@@ -978,6 +988,11 @@ uint16_t StratuxPort;
     // Write_String (Line, "WIFIname", WIFIname[0]); strcat(Line, " #  [char]\n"); Format_String(Output, Line);
     // Write_String (Line, "WIFIpass", WIFIpass[0]); strcat(Line, " #  [char]\n"); Format_String(Output, Line);
 #endif
+// #ifdef WITH_LORAWAN
+//     Format_String(Output, "AppKey = ");
+//     Format_HexBytes(Output, AppKey, 16);
+//     Format_String(Output, "\n");
+// #endif
   }
 
 } ;
