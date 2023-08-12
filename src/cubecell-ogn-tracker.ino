@@ -934,14 +934,14 @@ static void Radio_TxDone(void)  // when transmission completed
   OGN_TxConfig();
   OGN_RxConfig();               // refresh the receiver configuration
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio.Rx(0); }
+  Radio.RxBoosted(0); }
 
 static void Radio_TxTimeout(void) // never happens, not clear under which conditions.
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   OGN_TxConfig();
   OGN_RxConfig();
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio.Rx(0); }
+  Radio.RxBoosted(0); }
 
 static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
 
@@ -1334,7 +1334,7 @@ void setup()
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));  // set on default frequency
   OGN_TxConfig();
   OGN_RxConfig();
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
   // Serial.println("Radio started\n");
   Random.RX  ^= Radio.Random();
   Random.GPS ^= Radio.Random();
@@ -1351,7 +1351,7 @@ void setup()
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
   OGN_TxConfig();
   OGN_RxConfig();
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
 
   RX_RSSI.Set(-2*110);
 }
@@ -1510,7 +1510,7 @@ static void StartRFslot(void)                                     // start the T
   OGN_TxConfig();
   OGN_RxConfig();
   // Serial.printf("StartRFslot() #3\n");
-  Radio.Rx(0);
+  Radio.RxBoosted(0);
   TxTime0 = Random.RX  % 389;                                 // transmit times within slots
   TxTime1 = Random.GPS % 299;
   TxPkt0=TxPkt1=0;
@@ -1647,7 +1647,7 @@ void loop()
       OGN_RxConfig();
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
-      Radio.Rx(0);
+      Radio.RxBoosted(0);
       // printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
