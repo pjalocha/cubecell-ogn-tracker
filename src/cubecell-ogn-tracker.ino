@@ -504,6 +504,14 @@ static const char *AcftTypeName[16] = { "----", "Glid", "Tow ", "Heli",
                                         "Pwrd", "Jet ", "UFO",  "Ball",
                                         "Zepp", "UAV",  "Car ", "Fix " } ;
 
+static const char *CardDir[16] = { "N  ", "NNE", "NE ", "ENE",
+                                   "E  ", "ESE", "SE ", "SSE",
+                                   "S  ", "SSW", "SW ", "WSW",
+                                   "W  ", "WNW", "NW ", "NW " } ;
+
+static uint8_t Format_CardDir(char *Out, uint8_t Dir)
+{ Dir+=0x10; Dir>>=4; memcpy(Out, CardDir[Dir], 3); return 3; }
+
 static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
 { for( uint8_t Idx=TgtIdx; ; )
   { const OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx;
@@ -541,7 +549,8 @@ static void OLED_Target(uint32_t Target, uint8_t &TgtIdx, const GPS_Position &GP
       uint32_t Dir = IntAtan2(Packet->LonDist, Packet->LatDist);         // [16-bit cyclic]
       Dir &= 0xFFFF; Dir = (Dir*360)>>16;                                // [deg]
       Len=Format_UnsDec(Line, Dir, 3);                                   // [deg] direction to target
-      Line[Len++]=0xb0;
+      // Len=Format_CardDir(Line, Dir>>8);
+      // Line[Len++]=0xb0;
       Line[Len++]=' ';
       Len+=Format_UnsDec(Line+Len, (Dist+50)/100, 2, 1);                 // [km] distance to target
       Len+=Format_String(Line+Len, "km ");
@@ -562,10 +571,17 @@ static void OLED_Target(uint32_t Target, uint8_t &TgtIdx, const GPS_Position &GP
       uint16_t Speed = Packet->Packet.DecodeSpeed();    // [0.1m/s]
       uint16_t Track = Packet->Packet.DecodeHeading();  // [0.1deg]
       Len=Format_UnsDec(Line, (uint32_t)Track/10, 3);      // [deg] direction to target
-      Line[Len++]=0xb0;
+      // Line[Len++]=0xb0;
+      // Len=Format_CardDir(Line, Packet->Packet.Position.Heading>>2);
       Line[Len++]=' ';
       Len+=Format_UnsDec(Line+Len, (uint32_t)Speed, 2, 1);                 // [km] distance to target
-      Len+=Format_String(Line+Len, "m/s ");
+      Len+=Format_String(Line+Len, "m/s  ");
+      int8_t Age = Packet->Packet.Position.Time;
+      if(Age<60)
+      { Age = Age-GPS.Sec;
+        if(Age>3) Age-=60;
+        Len+=Format_SignDec(Line+Len, (int32_t)Age);
+        Line[Len++]='s'; }
       Line[Len]=0; Display.drawString(0, 50, Line);
 
       // Line[Len]=0; Display.drawString(0, 50, Line);
@@ -596,6 +612,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
     Len+=Format_UnsDec(Line+Len, (uint32_t)Packet->Packet.DecodeAltitude()); // [m] altitude
     Line[Len++]='m'; Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, Dir, 3);                             // [deg] direction to target
+    // Len+=Format_CardDir(Line+Len, Dir>>8);
     Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, (Dist+50)/100, 2, 1);                // [km] distance to target
     Len+=Format_String(Line+Len, "km");
