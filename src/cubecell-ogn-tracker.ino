@@ -3,13 +3,13 @@
 // the following options do not work correctly yet in this code
 // #define WITH_ADSL  // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
 #define WITH_FANET // only up to 8000m altitude
-#define WITH_PAW   // only up to 4000m alttude
+// #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
-// #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+#define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
 
-#define WITH_GPS_CONS // send the GPS NMEA to the console
+// #define WITH_GPS_CONS // send the GPS NMEA to the console
 
 #include "Arduino.h"
 #include <Wire.h>
@@ -93,7 +93,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "v0.1.6"
+#define SOFT_NAME "v0.1.7"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -499,12 +499,87 @@ static void OLED_Info(void)                                               // dis
     if(VertPos>=64) break; }                                              // give up when out of display vertical range
   Display.display(); }
 
+static const char *AcftTypeName[16] = { "----", "Glid", "Tow ", "Heli",
+                                        "SkyD", "Drop", "Hang", "Para",
+                                        "Pwrd", "Jet ", "UFO",  "Ball",
+                                        "Zepp", "UAV",  "Car ", "Fix " } ;
+
+static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
+{ for( uint8_t Idx=TgtIdx; ; )
+  { const OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx;
+    if(Packet->Alloc && !Packet->Packet.Header.NonPos && Packet->Packet.getAddressAndType()==Target) { TgtIdx=Idx; return Packet; }
+    Idx++; if(Idx>=RelayQueueSize) Idx=0;
+    if(Idx==TgtIdx) break; }
+  return 0; }
+
+static void OLED_Target(uint32_t Target, uint8_t &TgtIdx, const GPS_Position &GPS)
+{ Display.clear();
+  Display.setFont(ArialMT_Plain_10);
+  Display.setTextAlignment(TEXT_ALIGN_LEFT);
+  if(Target)
+  { uint8_t Len=Format_String(Line, "----:");
+    Line[Len++]=HexDigit(Target>>24);
+    Line[Len++]=':';
+    Len+=Format_Hex(Line+Len, (uint8_t)(Target>>16));
+    Len+=Format_Hex(Line+Len, (uint16_t)Target);
+    Line[Len]=0; // Display.drawString(0, 0, Line);
+    const OGN_RxPacket<OGN1_Packet> *Packet = FindTarget(Target, TgtIdx);
+    if(Packet)
+    { uint8_t Len=Format_String(Line, AcftTypeName[Packet->Packet.Position.AcftType]);
+      Line[Len++]=':';
+      Line[Len++]=HexDigit(Packet->Packet.Header.AddrType);
+      Line[Len++]=':';
+      Len+=Format_Hex(Line+Len, (uint8_t)(Packet->Packet.Header.Address>>16));
+      Len+=Format_Hex(Line+Len, (uint16_t)Packet->Packet.Header.Address);
+      Line[Len++]=' ';
+      Line[Len++]=' ';
+      Len+=Format_SignDec(Line+Len, (int32_t)Packet->RxRSSI*(-5), 2, 1);
+      Len+=Format_String(Line+Len, "dBm ");
+      Line[Len]=0; Display.drawString(0, 0, Line);
+      Display.setFont(ArialMT_Plain_16);
+      uint32_t Dist= IntDistance(Packet->LatDist, Packet->LonDist);      // [m]
+      uint32_t Dir = IntAtan2(Packet->LonDist, Packet->LatDist);         // [16-bit cyclic]
+      Dir &= 0xFFFF; Dir = (Dir*360)>>16;                                // [deg]
+      Len=Format_UnsDec(Line, Dir, 3);                                   // [deg] direction to target
+      Line[Len++]=0xb0;
+      Line[Len++]=' ';
+      Len+=Format_UnsDec(Line+Len, (Dist+50)/100, 2, 1);                 // [km] distance to target
+      Len+=Format_String(Line+Len, "km ");
+      int32_t Alt = Packet->Packet.DecodeAltitude();
+      Len+=Format_UnsDec(Line+Len, (uint32_t)Alt);
+      Line[Len++]='m';
+      Line[Len]=0; Display.drawString(0, 20, Line);
+      int32_t AltDiff = Packet->Packet.DecodeAltitude()*10-GPS.Altitude;
+      int32_t Climb = Packet->Packet.DecodeClimbRate()*GPS.ClimbRate;
+      if(Packet->Packet.hasBaro() && GPS.hasBaro)
+      { AltDiff = Packet->Packet.DecodeStdAltitude()*10 - GPS.StdAltitude; }
+      Len=Format_SignDec(Line, AltDiff, 2, 1);
+      Line[Len++]='m'; Line[Len++]=' ';
+      Len+=Format_SignDec(Line+Len, Climb, 2, 1);
+      Len+=Format_String(Line+Len, "m/s ");
+      Line[Len]=0; Display.drawString(0, 35, Line);
+      Display.setFont(ArialMT_Plain_10);
+      uint16_t Speed = Packet->Packet.DecodeSpeed();    // [0.1m/s]
+      uint16_t Track = Packet->Packet.DecodeHeading();  // [0.1deg]
+      Len=Format_UnsDec(Line, (uint32_t)Track/10, 3);      // [deg] direction to target
+      Line[Len++]=0xb0;
+      Line[Len++]=' ';
+      Len+=Format_UnsDec(Line+Len, (uint32_t)Speed, 2, 1);                 // [km] distance to target
+      Len+=Format_String(Line+Len, "m/s ");
+      Line[Len]=0; Display.drawString(0, 50, Line);
+
+      // Line[Len]=0; Display.drawString(0, 50, Line);
+    }
+    else Display.drawString(0, 0, Line);
+  }
+  else
+  { Display.setFont(ArialMT_Plain_16);
+    Display.drawString(0, 0, "No targets in range"); }
+
+  Display.display(); }
+
 static void OLED_Relay(const GPS_Position &GPS)                 // display list of aircrafts on the Relay list
 {
-  const char *AcftTypeName[16] = { "----", "Glid", "Tow ", "Heli",
-                                   "SkyD", "Drop", "Hang", "Para",
-                                   "Pwrd", "Jet ", "UFO", "Ball",
-                                   "Zepp", "UAV", "Car ", "Fix " } ;
   Display.clear();
   Display.setFont(ArialMT_Plain_10);
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -530,9 +605,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
   if(VertPos==0)
   { Display.setFont(ArialMT_Plain_16);
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
-    uint8_t Len=Format_String(Line, "No relay cand.");
-    Line[Len]=0;
-    Display.drawString(0, 0, Line); }
+    Display.drawString(0, 0, "No relay cand."); }
   Display.display(); }
 
 static void OLED_GPS(const GPS_Position &GPS)                 // display time, date and GPS data/status
@@ -689,12 +762,31 @@ static void OLED_RF(void)                 // display RF-related data
 const  int OLED_Pages    = 5;
 static int OLED_CurrPage = 0;
 
+static uint8_t  OLED_Mode=0;            // 0=pages, 1=tracking a target
+static uint8_t  OLED_CurrTgtIdx = 0;    // index of the current target in the relay queue
+static uint32_t OLED_CurrTarget = 0;    // target aircraft being tracked
+
+static void OLED_NextTarget(void)       // switch to the next target
+{ for(uint8_t Idx=OLED_CurrTgtIdx; ; )
+  { Idx++; if(Idx>=RelayQueueSize) Idx=0; if(Idx==OLED_CurrTgtIdx) break;
+    OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
+    if(Packet->Packet.Header.NonPos) continue;
+    uint32_t AddressAndType = Packet->Packet.getAddressAndType();
+    if(AddressAndType!=OLED_CurrTarget)
+    { OLED_CurrTarget=AddressAndType; OLED_CurrTgtIdx=Idx; break; }
+  }
+}
+
 static void OLED_NextPage(void)
 { OLED_CurrPage++;
   if(OLED_CurrPage>=OLED_Pages) OLED_CurrPage=0; }
 
 static void OLED_DispPage(const GPS_Position &GPS)
 { if(!OLED_isON) return;
+  if(OLED_Mode)
+  { if(OLED_CurrTarget==0) OLED_NextTarget();
+    OLED_Target(OLED_CurrTarget, OLED_CurrTgtIdx, GPS);
+    return; }
   switch(OLED_CurrPage)
   { case 2: OLED_Info(); break;
     case 1: OLED_RF(); break;
@@ -958,7 +1050,8 @@ static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
-  Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+  Radio.SetSyncWord(0xF1); } // 0x00F1  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+                             // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
 
 // there is an issue with the LoRa SYNC compatibility, some research on it is here:
 // https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
@@ -1080,40 +1173,50 @@ static bool Button_isPressed(void) { return digitalRead(USER_KEY)==0; } // tell 
 
 static bool     Button_LowPower=0;                  // set to one when button pressed for more than one second.
 
-static uint32_t Button_PressTime = 0;
-static  uint8_t Button_ShortPush = 0;
+static uint32_t Button_PressTime = 0;               // [ms] when the button was pressed
+static  uint8_t Button_ShortPush = 0;               // count short pushes of the button
+static  uint8_t Button_LongPush  = 0;               // count longer pushes of the button
 static uint32_t Button_PrevSysTime=0;               // [ms] previous sys-time when the Button_Process() was called
 static uint32_t Button_IdleTime=0;                  // [ms] count time when the user is not pushing the button
 
 static void Button_Process(void)                    // process the button push/release: as press-release works on interrupts, this can be now called less often
 { uint32_t SysTime = millis();                      // [ms]
   if(Button_isPressed())
-  { uint32_t LongPush=SysTime-Button_PressTime;
-    if(LongPush>1000) Button_LowPower=1; }
-  uint32_t Diff = SysTime-Button_PrevSysTime;
+  { uint32_t LongPush=SysTime-Button_PressTime;     // [ms] for how long the button pushed already
+    // if(LongPush>=1000)
+    if(LongPush>=4000) Button_LowPower=1; }         // if more than 3 seconds then request deep sleep
+  uint32_t Diff = SysTime-Button_PrevSysTime;       // [ms]
   if(Button_ShortPush==0)
   { Button_IdleTime+=Diff;                          // count idle time
     if(Button_IdleTime>100000) Button_IdleTime=100000; // [ms] top it at 100 sec
-    if(Button_IdleTime>=60000) OLED_OFF(); }        // turn off OLED when idle more than 60sec
+    if(Button_IdleTime>=60000 && OLED_Mode==0) OLED_OFF(); }  // turn off OLED when idle more than 60sec
   while(Button_ShortPush)
-  { if(OLED_isON) OLED_NextPage();                  // either switch OLED page
-             else OLED_ON();                        // or turn the OLED back ON
+  { if(!OLED_isON) OLED_ON();
+    else                                            // either switch OLED page or the target
+    { if(OLED_Mode) OLED_NextTarget();
+               else OLED_NextPage(); }
     Button_IdleTime=0;
     Button_ShortPush--; }
+  while(Button_LongPush)
+  { OLED_Mode = !OLED_Mode;
+    if(!OLED_isON) OLED_ON();
+    Button_IdleTime=0;
+    Button_LongPush--; }
   Button_PrevSysTime=SysTime; }
 
 static void Button_ForceActive(void)
 { Button_IdleTime=0; OLED_ON(); }                   // activate the OLED, as if the user pushed the button
 
-static void Button_ChangeInt(void)  // called by hardware interrupt on button push or release
-{ if(Button_isPressed())            // pressed
-  { Button_PressTime=millis(); }
-  else                              // released
+static void Button_ChangeInt(void)                  // called by hardware interrupt on button push or release
+{ if(Button_isPressed())                            // button has been now pressed
+  { Button_PressTime=millis(); }                    // [ms] record the moment it as pressed
+  else                                              // button has been now released
   { uint32_t Diff = millis()-Button_PressTime;
-    if(Diff<100)                    // it appears something is "pushing" the button at 1sec interval for 12-13ms - could it be battery readout ?
+    if(Diff<100)                                    // it appears something is "pushing" the button at 1sec interval for 12-13ms - could it be battery readout ?
     { // Serial.printf("ButtPulse: %d\n", Diff);
       return; }
-    if(Diff<400) Button_ShortPush++;
+    if(Diff<300) Button_ShortPush++;                // if button was pushed shorter than 0.4sec simply increase the counter
+    else if(Diff<1000) Button_LongPush++;              // count longer pushes
   }
 }
 
