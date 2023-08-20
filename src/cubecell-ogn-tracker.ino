@@ -1,9 +1,15 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
 // the following options do not work correctly yet in this code
-// #define WITH_ADSL // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+// #define WITH_ADSL  // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+// #define WITH_FANET // only up to 8000m altitude
+// #define WITH_PAW   // only up to 4000m alttude
+
+// use either WITH_BMP280 or WITH_BME280 but not both at the same time
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
-// #define WITH_BMP280 // read a BMP280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+#define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
+
+// #define WITH_GPS_CONS // send the GPS NMEA to the console
 
 #include "Arduino.h"
 #include <Wire.h>
@@ -79,14 +85,15 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define HARDWARE_ID 0x03
 #define SOFTWARE_ID 0x01
 
-#define HARD_NAME "CC-OGN"
-#define SOFT_NAME "2023.01.28"
+#define HARD_NAME "OGN-CC"
+// #define SOFT_NAME "2023.05.28"
+#define SOFT_NAME "v0.1.7"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
 #define DEFAULT_CONbaud    115200         // [bps]
 #define DEFAULT_PPSdelay       50         // [ms]
-#define DEFAULT_FreqPlan        1
+#define DEFAULT_FreqPlan        0
 
 #include "parameters.h"
 
@@ -98,9 +105,9 @@ static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every
 static uint8_t  BattCapacity = 0;        // [ %]
 
 static uint8_t calcBattCapacity(uint16_t mVolt)
-{ if(mVolt>=4050) return 100;                                 // 4.05V or above => full capacity
-  if(mVolt<=3550) return   0;                                 // 3.55V or below => zero capacity
-  return (mVolt-3550+2)/5; }                                  // linear dependence (simplified)
+{ if(mVolt>=4100) return 100;                                 // 4.10V or above => full capacity
+  if(mVolt<=3500) return   0;                                 // 3.50V or below => zero capacity
+  return (mVolt-3500+3)/6; }                                  // linear interpolation (simplified)
 
 // static uint8_t BattCapacity(void) { return BattCapacity(BattVoltage); }
 
@@ -145,13 +152,14 @@ static void BME280_Init(void)
 static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
 { if(BME280_Addr==0) return;
   float Temp  = BME280.readTemperature();        // [degC]
-  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  GPS.Temperature = floorf(Temp*10+0.5);         // [0.1 degC]
   float Press = BME280.readPressure();           // [Pa]
-  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
-  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.Pressure    = floorf(Press*4+0.5);         // [1/4 Pa]
+  // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.StdAltitude = floorf(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1;
   float Hum   = BME280.readHumidity();           // [%]
-  GPS.Humidity    = floor(Hum*10+0.5);           // [0.1 %]
+  GPS.Humidity    = floorf(Hum*10+0.5);           // [0.1 %]
   GPS.hasHum=1; }
 #endif
 
@@ -161,17 +169,18 @@ static uint8_t BMP280_Addr = 0x00;
 
 static void BMP280_Init(void)
 { for(uint8_t Addr=0x76; Addr<=0x77; Addr++)
-  { if(BMP280.begin(0x76, &Wire)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
+  { if(BMP280.begin(0x76)) { BMP280_Addr=Addr; break; } // BMP280 on the I2C
     Serial.printf("BMP280 not detected at 0x%02X\n", Addr); }
 }
 
-static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
+static void BMP280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
 { if(BMP280_Addr==0) return;
   float Temp  = BMP280.readTemperature();        // [degC]
-  GPS.Temperature = floor(Temp*10+0.5);          // [0.1 degC]
+  GPS.Temperature = floorf(Temp*10+0.5);          // [0.1 degC]
   float Press = BMP280.readPressure();           // [Pa]
-  GPS.Pressure    = floor(Press*4+0.5);          // [1/4 Pa]
-  GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.Pressure    = floorf(Press*4+0.5);          // [1/4 Pa]
+  // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.StdAltitude = floorf(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1; }
 #endif
 
@@ -231,13 +240,13 @@ static int RNG(uint8_t *Data, unsigned Size)
 // ===============================================================================================
 // CONSole UART
 
-void CONS_UART_Write(char Byte) // write byte to the console (USB serial port)
+static void CONS_UART_Write(char Byte) // write byte to the console (USB serial port)
 { Serial.write(Byte); }
 
-int  CONS_UART_Free(void)
+static int  CONS_UART_Free(void)
 { return Serial.availableForWrite(); }
 
-int  CONS_UART_Read (uint8_t &Byte)
+static int  CONS_UART_Read (uint8_t &Byte)
 { int Ret=Serial.read(); if(Ret<0) return 0;
   Byte=Ret; return 1; }
 
@@ -260,7 +269,7 @@ static void PrintPOGNS(void)                                   // print paramete
   Parameters.WritePOGNS_Comp(Line);
   Format_String(CONS_UART_Write, Line); }
 
-static void ConsNMEA_Process(void)                              // priocess NMEA received on the console
+static void ConsNMEA_Process(void)                              // process NMEA received on the console
 { if(!ConsNMEA.isPOGNS()) return;                               // ignore all but $POGNS
   if(ConsNMEA.hasCheck() && !ConsNMEA.isChecked() ) return;     // if CRC present then it must be correct
   if(ConsNMEA.Parms==0) { PrintPOGNS(); return; }               // if no parameters given, print the current parameters as $POGNS
@@ -483,10 +492,12 @@ static void GPS_Random_Update(const GPS_Position &Pos) // process LSB bits to pr
   GPS_Random_Update(Pos.Longitude);
   XorShift64(Random.Word); }
 
-// seems not to work
-// static void GPS_HardPPS(void)       // called by hardware interrupt on PPS
-// { uint32_t msTime = millis()-GPS_PPS_ms;
-//   Serial.printf("PPS: %4d\n", msTime); }
+static bool GPS_ReadPPS(void) { return digitalRead(GPIO12); } // tell if PPS line of the GPS is HIGH
+
+static void GPS_HardPPS(void)       // called by hardware interrupt on PPS
+{ // uint32_t msTime = millis()-GPS_PPS_ms;
+  // Serial.printf("PPS: %4d\n", msTime);
+}
 
 // ===============================================================================================
 // OLED pages
@@ -581,7 +592,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
     // Len+=Format_Hex(Line+Len, Packet->Rank);                       // rank for relay
     // Line[Len++]=' ';
     // Line[Len++]=':';
-    Len+=Format_UnsDec(Line+Len, Packet->Packet.DecodeAltitude()); // [m] altitude
+    Len+=Format_UnsDec(Line+Len, (uint32_t)Packet->Packet.DecodeAltitude()); // [m] altitude
     Line[Len++]='m'; Line[Len++]=' ';
     Len+=Format_UnsDec(Line+Len, Dir, 3);                             // [deg] direction to target
     Line[Len++]=' ';
@@ -625,11 +636,11 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
   if(GPS_State.PowerON)
   { uint8_t Len=0;
     if(GPS.Sec&1)
-    { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, GPS.Satellites);
-                  else  Len+=Format_UnsDec(Line+Len, GPS_SatCnt);
+    { if(GPS.isValid()) Len+=Format_UnsDec(Line+Len, (uint32_t)GPS.Satellites);
+                  else  Len+=Format_UnsDec(Line+Len, (uint32_t)GPS_SatCnt);
       Line[Len++]='s'; Line[Len++]='a'; Line[Len++]='t'; }
     else
-    { Len+=Format_UnsDec(Line+Len, (GPS_SatSNR+2)/4, 2);
+    { Len+=Format_UnsDec(Line+Len, ((uint32_t)GPS_SatSNR+2)/4, 2);
       Line[Len++]='d'; Line[Len++]='B'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -638,9 +649,9 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
   { Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 32, "GPS OFF"); }
   { uint8_t Len=0;
-    if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
+    if(GPS.Sec&1) { Len+=Format_UnsDec(Line+Len, (uint32_t)(BattVoltage+5)/10, 3, 2); Line[Len++]= 'V'; }
     else
-    { Len+=Format_UnsDec(Line+Len, BattCapacity); Line[Len++]= '%'; }
+    { Len+=Format_UnsDec(Line+Len, (uint32_t)BattCapacity); Line[Len++]= '%'; }
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_RIGHT);
     Display.drawString(128, 48, Line); }
@@ -654,14 +665,14 @@ static void OLED_RF(void)                 // display RF-related data
   Display.setFont(ArialMT_Plain_16);
 
   uint8_t Len=Format_String(Line, "SX1262: ");
-  Len+=Format_SignDec(Line+Len, (int16_t)Parameters.TxPower);              // Tx power
+  Len+=Format_SignDec(Line+Len, (int32_t)Parameters.TxPower);              // Tx power
   Len+=Format_String(Line+Len, "dBm");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   Display.drawString(0, 0, Line);
 
   Len=0; // Len=Format_String(Line, "Rx: ");
-  Len+=Format_SignDec(Line+Len, RX_RSSI.getOutput()*5, 2, 1);
+  Len+=Format_SignDec(Line+Len, (int32_t)RX_RSSI.getOutput()*5, 2, 1);
   Len+=Format_String(Line+Len, "dBm");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -669,14 +680,14 @@ static void OLED_RF(void)                 // display RF-related data
 
   Len=0; uint8_t Acfts = RelayQueue.size();
   if(Acfts)
-  { Len+=Format_UnsDec(Line+Len, Acfts);
+  { Len+=Format_UnsDec(Line+Len, (uint32_t)Acfts);
     Len+=Format_String(Line+Len, " Acft");
     Line[Len]=0;
     Display.setTextAlignment(TEXT_ALIGN_LEFT);
     Display.drawString(0, 32, Line); }
 
   Len=0;
-  Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+  Len+=Format_UnsDec(Line+Len, (uint32_t)RX_OGN_Count64);
   Len+=Format_String(Line+Len, "/min");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -685,7 +696,7 @@ static void OLED_RF(void)                 // display RF-related data
   Len=0;
   Len+=Format_String(Line+Len, Radio_FreqPlan.getPlanName());                 // name of the frequency plan
   Line[Len++]=' ';
-  Len+=Format_UnsDec(Line+Len, (uint16_t)(Radio_FreqPlan.getCenterFreq()/100000), 3, 1); // center frequency
+  Len+=Format_UnsDec(Line+Len, (uint32_t)(Radio_FreqPlan.getCenterFreq()/100000), 3, 1); // center frequency
   Len+=Format_String(Line+Len, "MHz");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -752,18 +763,18 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
 { Packet.HeaderWord = 0;
   Packet.Header.Address = Parameters.Address;                          // aircraft address
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
-  Packet.Header.NonPos = 1;
+  Packet.Header.NonPos = 1;                                            // this is not a position packet
   Packet.calcAddrParity();
   Packet.Status.Hardware=HARDWARE_ID;
   Packet.Status.Firmware=SOFTWARE_ID;
-  GPS.EncodeStatus(Packet);
-  uint8_t SatSNR = (GPS_SatSNR+2)/4;                            // encode number of satellites and SNR in the Status packet
+  Packet.clrTemperature();                                             // we have no temperature sensor other than the pressure sensor
+  GPS.EncodeStatus(Packet);                                            // encode altitude and possibly pressure/temperature
+  uint8_t SatSNR = (GPS_SatSNR+2)/4;                                   // encode number of satellites and SNR in the Status packet
   if(SatSNR>8) { SatSNR-=8; if(SatSNR>31) SatSNR=31; }
           else { SatSNR=0; }
   Packet.Status.SatSNR = SatSNR;
-  Packet.clrTemperature();
-  Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);              // [1/64V]
-  Packet.Status.RadioNoise = -RX_RSSI.getOutput();              // [-0.5dBm]
+  Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);                     // [1/64V]
+  Packet.Status.RadioNoise = -RX_RSSI.getOutput();                     // [-0.5dBm]
   uint16_t RxRate = RX_OGN_Count64+1;
   uint8_t RxRateLog2=0; RxRate>>=1; while(RxRate) { RxRate>>=1; RxRateLog2++; }
   Packet.Status.RxRate = RxRateLog2;
@@ -772,7 +783,21 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.TxPower = TxPower;
   return 1; }
 
-static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produce position OGN packet
+#ifdef WITH_FANET
+
+// static uint8_t FNT_Seq = 0x00; // to search for correct sync word
+
+static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
+{ if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
+  Packet.setAddress(Parameters.Address);
+  // char Seq[20]; sprintf(Seq, "Sync:%02X", FNT_Seq);
+  // Serial.println(Seq);
+  // Packet.setName(Seq);
+  GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
+  return 1; }
+#endif
+
+static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode position into an OGN packet
 { Packet.HeaderWord = 0;
   Packet.Header.Address = Parameters.Address;                          // aircraft address
   Packet.Header.AddrType = Parameters.AddrType;                        // aircraft address-type
@@ -782,14 +807,16 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // produc
   GPS.Encode(Packet);
   return 1; }
 
+#ifdef WITH_ADSL
 static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce position ADS-L packet
 { Packet.Init();
-  Packet.setAddress (Parameters.Address);
-  Packet.setAddrType(Parameters.AddrType);
-  Packet.setRelay(0);
-  Packet.setAcftType(Parameters.AcftType);
+  Packet.setAddress    (Parameters.Address);
+  Packet.setAddrTypeOGN(Parameters.AddrType);
+  // Packet.setRelay(0);
+  Packet.setAcftTypeOGN(Parameters.AcftType);
   GPS.Encode(Packet);
   return 1; }
+#endif
 
 static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
 { uint8_t Sec = (Time-Delay)%60; // Serial.printf("cleanTime(%d)\n", Sec);
@@ -988,11 +1015,11 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
 extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
 
 // additional RF configuration reuired for OGN/ADS-L to work
-static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes)
-{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
+static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, RadioModShapings_t BT=MOD_SHAPING_G_BT_05)
+{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = BT;  // specific BT
   SX126xSetModulationParams(&SX126x.ModulationParams);
   SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
-  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
+  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;                   //
   SX126xSetPacketParams(&SX126x.PacketParams);
   SX126xSetSyncWord((uint8_t *)SyncWord); }
 
@@ -1002,9 +1029,11 @@ static void OGN_TxConfig(void)
   // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
   Radio_UpdateConfig(OGN1_SYNC, 8); }
 
-static void ADSL_TxConfig(void)
+#ifdef WITH_ADSL
+static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
 { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
+#endif
 
 static void OGN_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 52, 0, 0, 0, 0, true);
@@ -1012,9 +1041,11 @@ static void OGN_RxConfig(void)
   // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
   Radio_UpdateConfig(OGN1_SYNC+1, 7); }
 
+#ifdef WITH_ADSL
 static void ADSL_RxConfig(void)
 { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true); // same as OGN just different packet size
   Radio_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
+#endif
 
 // Manchester encode packet data
 static int Manchester(uint8_t *TxData, const uint8_t *PktData, int PktLen)
@@ -1042,10 +1073,12 @@ static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign
 { OGN_TxConfig();
   return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
+#ifdef WITH_ADSL
 // transmit ADS-L packet with possible signature
 static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
 { ADSL_TxConfig();
   return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
+#endif
 
 // ===============================================================================================
 // User button and Power-OFF
@@ -1214,6 +1247,12 @@ static void NoGPS(void)
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_TimeSync.PPS_UTC);
+#ifdef WITH_BME280
+  BME280_Read(GPS);
+#endif
+#ifdef WITH_BMP280
+  BMP280_Read(GPS);
+#endif
   ReadBatteryVoltage();
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
@@ -1261,6 +1300,12 @@ static void EndOfGPS(void)                                 // after the GPS comp
   RX_OGN_Count64 += RF_RxPackets - RX_OGN_CountDelay.Input(RF_RxPackets); // add OGN packets received, subtract packets received 64 seconds ago
   RF_RxPackets=0;                                                       // clear the received packet count
   CleanRelayQueue(GPS_TimeSync.PPS_UTC);
+#ifdef WITH_BME280
+  BME280_Read(GPS);
+#endif
+#ifdef WITH_BMP280
+  BMP280_Read(GPS);
+#endif
   bool TxPos=0;
   if(GPS_State.FixValid)                                           // if position is valid
   { GPS_ValidUTC  = GPS.getUnixTime();

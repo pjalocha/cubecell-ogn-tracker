@@ -3,8 +3,26 @@
 
 #include <stdint.h>
 
+int32_t Coord_FNTtoOGN(int32_t Coord);
+int32_t Coord_OGNtoFNT(int32_t Coord);
+
+int32_t Coord_FNTtoUBX(int32_t Coord);
+int32_t Coord_UBXtoFNT(int32_t Coord);
+
+int32_t Coord_CRDtoOGN(int32_t Coord);
+int32_t Coord_OGNtoCRD(int32_t Coord);
+
 int32_t FeetToMeters(int32_t Altitude);                               //
 int32_t MetersToFeet(int32_t Altitude);                               //
+
+uint8_t AcftType_OGNtoADSB(uint8_t AcftType);
+uint8_t AcftType_FNTtoADSB(uint8_t AcftType);
+uint8_t AcftType_ADSBtoOGN(uint8_t AcftCat);
+uint8_t AcftType_OGNtoGDL(uint8_t AcftType);
+uint8_t AcftType_OGNtoADSL(uint8_t AcftType);
+uint8_t AcftType_ADSLtoOGN(uint8_t AcftCat);
+uint8_t AcftType_FNTtoOGN(uint8_t AcftType);
+uint8_t AcftType_FNTtoADSL(uint8_t AcftType);
 
 uint16_t EncodeUR2V8(uint16_t Value);                                 // Encode unsigned 12bit (0..3832) as 10bit
 uint16_t DecodeUR2V8(uint16_t Value);                                 // Decode 10bit 0..0x3FF
@@ -88,5 +106,9 @@ uint8_t EncodeAscii85(    char *Ascii, uint32_t    Word );  // Encode 32-bit Wor
 uint8_t DecodeAscii85(uint32_t &Word,  const char *Ascii);  // Decode 5-char Ascii-85 to 32-bit Word
 
 int APRS2IGC(char *Out, const char *Inp, int GeoidSepar);   // convert APRS message to IGC B-record
+
+float BaroTemp(float h);                    // temperature [K] at given altitude [m]
+float BaroPress(float h);                   // pressure [Pa] at given altitude [m]
+float BaroAlt(float P);                     // altitude [m] for given pressure [Pa]
 
 #endif // __OGNCONV_H__
