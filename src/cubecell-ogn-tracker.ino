@@ -76,6 +76,26 @@ static void DebugPin_ON(bool ON=1) { digitalWrite(DebugPin, ON); }
 
 // ===============================================================================================
 
+static uint8_t I2C_Read (uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait=10)
+{ Wire.beginTransmission(Addr);
+  int Ret=Wire.write(Reg);
+  Wire.endTransmission(false);
+  Ret=Wire.requestFrom(Addr, Len);
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { Data[Idx]=Wire.read(); }
+  // Wire.endTransmission();
+  return Ret!=Len; }
+ 
+static uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait=10)
+{ Wire.beginTransmission(Addr);
+  int Ret=Wire.write(Reg);
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { Ret=Wire.write(Data[Idx]); if(Ret!=1) break; }
+  Wire.endTransmission();
+  return Ret!=1; }
+
+// ===============================================================================================
+
 static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
@@ -442,7 +462,7 @@ static uint32_t GPS_OFF_ms = 0;                        // [ms] when GPS was turn
 static void GPS_ON(void)                               // Turn the GPS ON
 { if(GPS_State.PowerON) return;
   GPS_ON_ms = millis();
-  GPS.begin(115200);
+  GPS.begin(115200);                                   // this call blocks for a long time
   GPS_State.Flags=0;
   GPS_State.PowerON=1; }
 
@@ -888,6 +908,9 @@ static const uint8_t ADSL_SYNC[10] = { 0x55, 0x99, 0x95, 0xA6, 0x9A, 0x65, 0xA9,
 static TimeSync RF_TimeSync;
 static bool     RF_SubSlot  = 0;      // 0 = first TX/RX sub-slot: 0.4-0.8sec 1 = second TX/RX sub-slot: 0.8-1.2sec
 static uint8_t  RF_Channel  = 0;      // hopping channel, in Europe/Africa 0 or 1, more channels in Australia, South America and USA/Canada
+static uint8_t  RF_MissedSlots=0;     // counts missed slots where the RF processing chain did not pick up the packets
+
+// static uint8_t RF_SubSlotCount = 0;
 
 static int RF_TxTime[2] = { 0, 0 };   // [ms] transmision times for the two sub-slots
 
@@ -904,7 +927,7 @@ static uint16_t RF_TxPackets = 0;
 
 static RadioEvents_t Radio_Events;
 
-static int SubSlotStart(bool SubSlot) { return SubSlot?800:350; }
+static int SubSlotStart(bool SubSlot) { return SubSlot?800:350; }  // [ms] return time after the PPS the sub-slot hould start
 
 // [ms] time left for the receiver to listen for packets
 static int RxTime(int msTime, int msTxTime=(-1))
@@ -1273,6 +1296,7 @@ static void NoGPS(void)
       InfoTxBackOff = 15 + (Random.RX%3);
     }
   }
+  if(RF_TxPkt[0] || RF_TxPkt[1]) RF_MissedSlots++;
   if(Info>0) RF_TxPkt[1] = &TxInfoPacket;
   else if(GetRelayPacket(&TxInfoPacket))
   { RF_TxPkt[1] = &TxInfoPacket; }
@@ -1338,6 +1362,7 @@ static void EndOfGPS(void)                                 // after the GPS comp
   CONS_Proc();
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
+  if(RF_TxPkt[0] || RF_TxPkt[1]) RF_MissedSlots++;
   RF_TxPkt[0]=RF_TxPkt[1]=0;
   if(TxPos) RF_TxPkt[0] = RF_TxPkt[1] = &TxPosPacket;
   static uint8_t InfoTxBackOff=0;
@@ -1401,6 +1426,8 @@ void loop()
   Radio_RxProcess();                                              // process received packets, if any
 
   CONS_Proc();                                                    // process input from the console
+
+  if(RF_MissedSlots>30) CySoftwareReset();                        // if RF TX/RX is not picking up packets to transmit then there is something wrong
 
 // RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++;             // [0.5dBm] this part we need to do in the Radio thread
   uint32_t msTime = millis();
