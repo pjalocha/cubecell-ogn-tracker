@@ -107,7 +107,7 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "v0.1.7"
+#define SOFT_NAME "v0.1.8"
 
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
@@ -312,6 +312,7 @@ static void CONS_CtrlR(void)
 // const char CtrlB = 'B'-'@';
 const char CtrlC = 'C'-'@';
 const char CtrlR = 'R'-'@';
+const char CtrlX = 'X'-'@';
 
 static int CONS_Proc(void)
 { int Count=0;
@@ -319,8 +320,9 @@ static int CONS_Proc(void)
   { uint8_t Byte; int Err=CONS_UART_Read(Byte); if(Err<=0) break;
     Count++;
     // if(Byte==CtrlB) CONS_CtrlB();                                // print battery voltage and capacity -> crashes, why ?!
-    if(Byte==CtrlC) CONS_CtrlC();                                // if Ctrl-C received: print parameters
-    if(Byte==CtrlR) CONS_CtrlR();                                // print relay queue
+    if(Byte==CtrlC) CONS_CtrlC();                                   // if Ctrl-C received: print parameters
+    if(Byte==CtrlR) CONS_CtrlR();                                   // print relay queue
+    // if(Byte==CtrlX) CySoftwareReset();                              // restart
     ConsNMEA.ProcessByte(Byte);
     // printf("CONS_Proc() Err=%d, Byte=%02X, State/Len=%d/%d\n\r", Err, Byte, ConsNMEA.State, ConsNMEA.Len);
     if(ConsNMEA.isComplete())
@@ -1282,6 +1284,7 @@ static void NoGPS(void)
   CONS_Proc();
   XorShift64(Random.Word);
 
+  if(RF_TxPkt[0] || RF_TxPkt[1]) RF_MissedSlots++;
   RF_TxPkt[0]=0; RF_TxPkt[1]=0;
   static uint8_t InfoTxBackOff=0;
   static uint8_t InfoToggle=0;
@@ -1296,11 +1299,19 @@ static void NoGPS(void)
       InfoTxBackOff = 15 + (Random.RX%3);
     }
   }
-  if(RF_TxPkt[0] || RF_TxPkt[1]) RF_MissedSlots++;
   if(Info>0) RF_TxPkt[1] = &TxInfoPacket;
   else if(GetRelayPacket(&TxInfoPacket))
   { RF_TxPkt[1] = &TxInfoPacket; }
-  if(GetRelayPacket(&TxRelPacket))
+  static uint8_t TxPosBackOff=0;
+  if(TxPosBackOff) TxPosBackOff--;
+  else if(GPS.isValid())
+  { getPosPacket(TxPosPacket.Packet, GPS);
+    TxPosPacket.Packet.Position.Time = 63;
+    TxPosPacket.Packet.Whiten();
+    TxPosPacket.calcFEC();
+    RF_TxPkt[0] = &TxPosPacket;
+    TxPosBackOff = 3 + (Random.RX%5); }
+  if(RF_TxPkt[0]==0 && GetRelayPacket(&TxRelPacket))
   { RF_TxPkt[0] = &TxRelPacket; }
   if(Random.RX&0x10) Swap(RF_TxPkt[0], RF_TxPkt[1]);
 
@@ -1429,8 +1440,14 @@ void loop()
 
   if(RF_MissedSlots>30) CySoftwareReset();                        // if RF TX/RX is not picking up packets to transmit then there is something wrong
 
+  const uint32_t millis_1h = 60*60*1000;
+  const uint32_t millis_24h = 24*millis_1h;
+  const uint32_t millis_1week = 7*millis_24h;
+
 // RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++;             // [0.5dBm] this part we need to do in the Radio thread
   uint32_t msTime = millis();
+  if(msTime>millis_24h && RelayQueue.size()==0) CySoftwareReset();
+
   uint32_t msDiff = GPS_TimeSync.msPPS(msTime);
 
   if(msDiff>=1000)                                                 // track the PPS
