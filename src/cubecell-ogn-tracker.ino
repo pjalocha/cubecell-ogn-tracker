@@ -2,7 +2,7 @@
 
 // the following options do not work correctly yet in this code
 // #define WITH_ADSL  // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
-#define WITH_FANET // only up to 8000m altitude
+// #define WITH_FANET // only up to 8000m altitude
 // #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
