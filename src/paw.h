@@ -18,16 +18,15 @@ class PAW_Packet
          struct
          { uint8_t  Sync   : 8; // [ 0] the first (thus lowest) byte is the "sync" = '$' = 0x24 (or 0x48)
            uint32_t Address:24; // [ 1] 24-bit address: can be ICAO or internally produced
-         } ;
+         }  __attribute__((packed)) ;
        } ;
        float    Longitude;      // [ 4] [deg]
        float    Latitude;       // [ 8] [deg]
-       uint16_t Altitude;       // [12] [m]
+       uint16_t Altitude;       // [12] [m]    AMSL
        union
        { uint16_t HeadWord;     // [14]
          struct
          { uint16_t Heading:9;  // [14] [deg]
-           //  int8_t  Climb  :7;  // [64fpm] proposed extension
          } ;
        } ;
        union
@@ -35,13 +34,12 @@ class PAW_Packet
          struct
          { uint8_t  Seq;        // [16] sequence number to transmit longer messages
            uint8_t  Msg[3];     // [17] 3-byte part of the longer message
-         } ;
+         }  __attribute__((packed)) ;
        } ;
        union
        { uint16_t SpeedWord;    // [20]
          struct
          { uint16_t Speed:10;   // [20] [kt]
-           // uint8_t  Time : 6;   // [sec] proposed extension
          } ;
        } ;
        union
@@ -49,14 +47,11 @@ class PAW_Packet
          struct
          { uint8_t  AcftType:4; // [22] lower nibble is the aircraft-type like for FLARM/OGN, upper nibble possibly retransmit flag
            uint8_t  Relay   :4; // [22] to be worked out: 1 or 2 signal some kind of relay
-           // bool     Relay   :1; // relay flag (by ground station)
-           // bool     OGN     :1; // for packets produced by OGN-Tracker - proposed extension
-           // uint8_t  AddrType:2; // address-type for OGN packets (if OGN==1) - proposed extension
-         } ;
+         } __attribute__((packed)) ;
        } ;
-       uint8_t  CRC;            // [24] internal CRC: a XOR of all bytes
-    } ;
-  } ;
+       uint8_t  CRC;            // [23] internal CRC: a XOR of all bytes
+     }  __attribute__((packed)) ;
+   }  __attribute__((packed)) ;
 
   public:
    void Copy(const uint8_t *Data) { memcpy(Byte, Data, Size); }
@@ -66,8 +61,7 @@ class PAW_Packet
        Byte[Idx]=0; }
 
    uint8_t getAddrType(void) const            // get (or guess) address-type
-   { // if(OGN) return AddrType;                 // if OGN-Tracker then AddrType is explicit
-     if(AcftType==0xF) return 3;              // if fixed object then OGN-type
+   { if(AcftType==0xF) return 3;              // if fixed object then OGN-type
      if(Address<0xD00000) return 1;           // ICAO-type
      if(Address<0xE00000) return 2;           // FLARM-type
      return 3; }                              // OGN-type
@@ -83,7 +77,7 @@ class PAW_Packet
      Alt = Altitude;
      return 3; }
 
-   int Copy(const OGN1_Packet &Packet /* , bool Ext=0 */ )         // convert from an OGN packet
+   int Copy(const OGN1_Packet &Packet)         // convert from an OGN packet
    { Clear();
      Address  = Packet.Header.Address;                     // [24-bit]
      if(Packet.Header.NonPos) return 0;                    // encode only position packets
@@ -95,20 +89,9 @@ class PAW_Packet
      Speed = (398*(int32_t)Packet.DecodeSpeed()+1024)>>11; // [0.1m/s] => [kts]
      Latitude  = (0.0001f/60)*Packet.DecodeLatitude();     // [deg]
      Longitude = (0.0001f/60)*Packet.DecodeLongitude();    // [deg]
-/*
-     if(Ext)
-     { OGN=1;                                              // extended data flag
-       AddrType = Packet.Header.AddrType;                  // [2-bit]
-       Relay    = Packet.Header.Relay;                     // relay flag
-       // Time = Packet.Position.Time;                        // [sec]
-       int32_t ClimbRate = Packet.DecodeClimbRate();       // [0.1m/s]
-       ClimbRate = (ClimbRate*315+512)>>10;                // [64fpm]
-       if(ClimbRate>127) ClimbRate=127;
-       else if(ClimbRate<(-127)) ClimbRate=(-127);
-       Climb = ClimbRate; }
-*/
      SeqMsg = 0;
-     setCRC(); return 1; }
+     setCRC();
+     return 1; }
 
    int WriteStxJSON(char *JSON) const
    { int Len=0;
@@ -134,7 +117,6 @@ class PAW_Packet
      // Len+=Format_SignDec(JSON+Len, RxTime, 4, 3, 1);
      Len+=sprintf(JSON+Len, ",\"lat_deg\":%8.7f,\"lon_deg\":%8.7f,\"alt_msl_m\":%d", Latitude, Longitude, Altitude);
      Len+=sprintf(JSON+Len, ",\"track_deg\":%d,\"speed_mps\":%3.1f", Heading, 0.514*Speed);
-     // if(OGN) Len+=sprintf(JSON+Len, ",\"climb_mps\":%3.1f", 0.32512*Climb);
      return Len; }
 
    uint8_t Dump(char *Out)
@@ -160,12 +142,13 @@ class PAW_Packet
       Byte[Len] = (Upp<<4) | Low; Inp+=2; }                          // new byte, count input
     return Len; }                                                    // return number of bytes read = packet length = should be 24
 
-   static void Whiten(uint8_t *Packet, int Len)                       // whitening applied to PAW packet, includes internal CRC
-   { const static uint8_t White[] = { 0x05, 0xb4, 0x05, 0xae, 0x14, 0xda,
-        0xbf, 0x83, 0xc4, 0x04, 0xb2, 0x04, 0xd6, 0x4d, 0x87, 0xe2, 0x01, 0xa3, 0x26,
-        0xac, 0xbb, 0x63, 0xf1, 0x01, 0xca, 0x07, 0xbd, 0xaf, 0x60, 0xc8, 0x12, 0xed,
-        0x04, 0xbc, 0xf6, 0x12, 0x2c, 0x01, 0xd9, 0x04, 0xb1, 0xd5, 0x03, 0xab, 0x06,
-        0xcf, 0x08, 0xe6, 0xf2, 0x07, 0xd0, 0x12, 0xc2, 0x09, 0x34, 0x20 };
+   void Whiten(void) { Whiten(Byte, Size); }
+
+   static void Whiten(uint8_t *Packet, int Len)                      // whitening applied to PAW packet, includes internal CRC
+   { const static uint8_t White[] =
+     {  0x05, 0xb4, 0x05, 0xae, 0x14, 0xda, 0xbf, 0x83,
+        0xc4, 0x04, 0xb2, 0x04, 0xd6, 0x4d, 0x87, 0xe2,
+        0x01, 0xa3, 0x26, 0xac, 0xbb, 0x63, 0xf1, 0x01 };
      for(int Idx=0; Idx<Len; Idx++)
      { Packet[Idx]^=White[Idx]; }
    }
@@ -187,6 +170,8 @@ class PAW_Packet
 
    uint8_t CRC8(void) { return CRC8(Byte, Size, 0x71); }            // calc. external CRC8 for the packet, Poly = 107
 
+// #define WITH_CRC8_TABLE
+#ifdef WITH_CRC8_TABLE      // CRC8 with a lookup table: probably faster
    static uint8_t CRC8(uint8_t Byte, uint8_t CRC)
    { static const uint8_t Table[256] = {
     0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15, 0x38, 0x3f, 0x36, 0x31,
@@ -212,6 +197,16 @@ class PAW_Packet
     0xde, 0xd9, 0xd0, 0xd7, 0xc2, 0xc5, 0xcc, 0xcb, 0xe6, 0xe1, 0xe8, 0xef,
     0xfa, 0xfd, 0xf4, 0xf3 } ;
      return Table[CRC ^ Byte]; }
+#else                       // CRC8 with direct calculation: probably slower but less flash/RAM
+   static uint8_t CRC8(uint8_t Byte, uint8_t CRC)
+   { const uint8_t Poly = 0x07;  // 0x107
+     CRC ^= Byte;
+     for(uint8_t Bit=0; Bit<8; Bit++)
+     { if(CRC&0x80) { CRC = (CRC<<1) ^ Poly; }
+               else { CRC = (CRC<<1)       ; }
+     }
+     return CRC; }
+#endif
 
 } ;
 
