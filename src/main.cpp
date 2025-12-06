@@ -6,7 +6,7 @@
 // #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
-#define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
+// #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
 // #define WITH_BMP280 // read a BMP280 pressure/temperature sensor attached to the I2C (same as the OLED)
 
 // #define WITH_GPS_CONS // send the GPS NMEA to the console
@@ -37,8 +37,8 @@
 #include <Adafruit_BMP280.h>  // pressure/temperature/humidity sensor
 #endif
 
-#include "fifo.h"
-#include "lowpass2.h"
+// #include "fifo.h"
+// #include "lowpass2.h"
 // #include "atmosphere.h"
 #include "format.h"
 #include "nmea.h"
@@ -46,7 +46,9 @@
 #include "ogn1.h"
 #include "crc1021.h"
 #include "freqplan.h"
-// #include "rfm.h"
+#include "radio.h"
+
+#include "main.h"
 
 #ifdef WITH_ADSL
 #include "adsl.h"
@@ -82,19 +84,34 @@ static void DebugPin_ON(bool ON=1) { digitalWrite(DebugPin, ON); }
 
 // ===============================================================================================
 
-static uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
-static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
+Random64 Random = { 0x0123456789ABCDEF };
 
-#define WITH_OGN1                          // OGN protocol version 1
-#define OGN_Packet OGN1_Packet
+static int RNG(uint8_t *Data, unsigned Size)  // produce random bytes
+{ while(Size)
+  { Random.GPS += micros();
+    Random.RX  += analogRead(ADC1);
+    XorShift64(Random.Word);
+    const uint8_t *Src = (const uint8 *)&Random.Word;
+    for(int Idx=0; Idx<8; Idx++)
+    { if(Size==0) break;
+      *Data++ = Src[Idx];
+      Size--; }
+  }
+  return 1; }
 
+// ===============================================================================================
+
+uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
+uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
+/*
 #define HARDWARE_ID 0x03
 #define SOFTWARE_ID 0x01
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
 #define SOFT_NAME "v0.1.7"
-
+*/
+/*
 #define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
 #define DEFAULT_GeoidSepar     40         // [m]
 #define DEFAULT_CONbaud    115200         // [bps]
@@ -102,82 +119,16 @@ static uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
 #define DEFAULT_FreqPlan        0
 
 #include "parameters.h"
+*/
 
-static FlashParameters Parameters;       // parameters stored in Flash: address, aircraft type, etc.
+FlashParameters Parameters;       // parameters stored in Flash: address, aircraft type, etc.
 
 // ===============================================================================================
 
 static void Button_ForceActive(void);
 
-static void OGN_TxConfig(void);
-static void OGN_RxConfig(void);
-
-class RFM_FSK_RxPktData             // OGN packet received by the RF chip
-{ public:
-   static const uint8_t Bytes=26;   // [bytes] number of bytes in the packet
-   uint32_t Time;                   // [sec] Time slot
-   uint16_t msTime;                 // [ms] reception time since the PPS[Time]
-   uint8_t Channel;                 // [   ] channel where the packet has been recieved
-   uint8_t RSSI;                    // [-0.5dBm] receiver signal strength
-   uint8_t Data[Bytes];             // Manchester decoded data bits/bytes
-   uint8_t Err [Bytes];             // Manchester decoding errors
-
-  public:
-
-   void Print(void (*CONS_UART_Write)(char), uint8_t WithData=0) const
-   { // uint8_t ManchErr = Count1s(RxPktErr, 26);
-     Format_String(CONS_UART_Write, "RxPktData: ");
-     Format_HHMMSS(CONS_UART_Write, Time);
-     CONS_UART_Write('+');
-     Format_UnsDec(CONS_UART_Write, msTime, 4, 3);
-     CONS_UART_Write(' '); Format_Hex(CONS_UART_Write, Channel);
-     CONS_UART_Write('/');
-     Format_SignDec(CONS_UART_Write, (int16_t)(-5*(int16_t)RSSI), 3, 1);
-     Format_String(CONS_UART_Write, "dBm\n");
-     if(WithData==0) return;
-     for(uint8_t Idx=0; Idx<Bytes; Idx++)
-     { CONS_UART_Write(' '); Format_Hex(CONS_UART_Write, Data[Idx]); }
-     CONS_UART_Write('\r'); CONS_UART_Write('\n');
-     for(uint8_t Idx=0; Idx<Bytes; Idx++)
-     { CONS_UART_Write(' '); Format_Hex(CONS_UART_Write, Err[Idx]); }
-     CONS_UART_Write('\r'); CONS_UART_Write('\n');
-   }
-
-   bool NoErr(void) const
-   { for(uint8_t Idx=0; Idx<Bytes; Idx++)
-       if(Err[Idx]) return 0;
-     return 1; }
-
-   uint8_t ErrCount(void) const                         // count detected manchester errors
-   { uint8_t Count=0;
-     for(uint8_t Idx=0; Idx<Bytes; Idx++)
-       Count+=Count1s(Err[Idx]);
-     return Count; }
-
-   uint8_t ErrCount(const uint8_t *Corr) const          // count errors compared to data corrected by FEC
-   { uint8_t Count=0;
-     for(uint8_t Idx=0; Idx<Bytes; Idx++)
-       Count+=Count1s((uint8_t)((Data[Idx]^Corr[Idx])&(~Err[Idx])));
-     return Count; }
-
- template <class OGNx_Packet>
-  uint8_t Decode(OGN_RxPacket<OGNx_Packet> &Packet, LDPC_Decoder &Decoder, uint8_t Iter=32) const
-  { uint8_t Check=0;
-    uint8_t RxErr = ErrCount();                                // conunt Manchester decoding errors
-    Decoder.Input(Data, Err);                                  // put data into the FEC decoder
-    for( ; Iter; Iter--)                                       // more loops is more chance to recover the packet
-    { Check=Decoder.ProcessChecks();                           // do an iteration
-      if(Check==0) break; }                                    // if FEC all fine: break
-    Decoder.Output(Packet.Packet.Byte());                      // get corrected bytes into the OGN packet
-    RxErr += ErrCount(Packet.Packet.Byte());
-    if(RxErr>15) RxErr=15;
-    Packet.RxErr  = RxErr;
-    Packet.RxChan = Channel;
-    Packet.RxRSSI = RSSI;
-    Packet.Correct= Check==0;
-    return Check; }
-
-} ;
+// static void OGN_TxConfig(void);
+// static void OGN_RxConfig(void);
 
 // ===============================================================================================
 
@@ -283,39 +234,35 @@ static void VextOFF(void)                  // Vext default OFF
 { pinMode(Vext,OUTPUT);
   digitalWrite(Vext, HIGH); }
 
-static FreqPlan Radio_FreqPlan;       // RF hopping pattern
-
-static FIFO<RFM_FSK_RxPktData, 16> RxFIFO;         // buffer for received packets
+// ===============================================================================================
 
 const int RelayQueueSize = 32;
 static OGN_PrioQueue<OGN1_Packet, RelayQueueSize> RelayQueue;  // candidate packets to be relayed
 
-static Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
-static uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
+static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
+{ for( uint8_t Idx=TgtIdx; ; )
+  { const OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx;
+    if(Packet->Alloc && !Packet->Packet.Header.NonPos && Packet->Packet.getAddressAndType()==Target) { TgtIdx=Idx; return Packet; }
+    Idx++; if(Idx>=RelayQueueSize) Idx=0;
+    if(Idx==TgtIdx) break; }
+  return 0; }
 
-static LowPass2<int32_t, 4,2,4> RX_RSSI;       // low pass filter to average the RX noise
+static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
+{ uint8_t Sec = (Time-Delay)%60; // Serial.printf("cleanTime(%d)\n", Sec);
+  RelayQueue.cleanTime(Sec); }             // remove packets 20(default) seconds into the past
 
-// ===============================================================================================
-
-static union
-{ uint64_t Word;
-  struct
-  { uint32_t RX;
-    uint32_t GPS;
-  } ;
-} Random = { 0x0123456789ABCDEF };
-
-static int RNG(uint8_t *Data, unsigned Size)
-{ while(Size)
-  { Random.GPS += micros();
-    Random.RX  += analogRead(ADC1);
-    XorShift64(Random.Word);
-    const uint8_t *Src = (const uint8 *)&Random.Word;
-    for(int Idx=0; Idx<8; Idx++)
-    { if(Size==0) break;
-      *Data++ = Src[Idx];
-      Size--; }
-  }
+static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
+{ if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
+  XorShift64(Random.Word);                             // produce a new random number
+  uint8_t Idx=RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
+  if(RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
+  memcpy(Packet->Packet.Byte(), RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
+  Packet->Packet.Header.Relay=1;                      // increment the relay count (in fact we only do single relay)
+  // Packet->Packet.calcAddrParity();
+  if(!Packet->Packet.Header.Encrypted) Packet->Packet.Whiten(); // whiten but only for non-encrypted packets
+  Packet->calcFEC();                                  // Calc. the FEC code => packet ready for transmission
+  // PrintRelayQueue(Idx);  // for debug
+  RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
 // ===============================================================================================
@@ -448,8 +395,8 @@ static  int16_t GPS_GeoidSepar= 0;     // [0.1m]
 static uint16_t GPS_LatCosine = 3000;  // [1.0/4096]
 static uint8_t  GPS_Satellites = 0;    //
 
-static uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
-static uint32_t GPS_PPS_UTC = 0;                      // [sec] Unix time which corresponds to the most recent PPS
+uint32_t GPS_PPS_ms = 0;                        // [ms] System timer at the most recent PPS
+uint32_t GPS_PPS_UTC = 0;                      // [sec] Unix time which corresponds to the most recent PPS
 
 static uint32_t GPS_Idle=0;                            // [ticks] to detect when GPS stops sending data
 
@@ -585,14 +532,6 @@ static const char *CardDir[16] = { "N  ", "NNE", "NE ", "ENE",
 
 static uint8_t Format_CardDir(char *Out, uint8_t Dir)
 { Dir+=0x10; Dir>>=4; memcpy(Out, CardDir[Dir], 3); return 3; }
-
-static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
-{ for( uint8_t Idx=TgtIdx; ; )
-  { const OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx;
-    if(Packet->Alloc && !Packet->Packet.Header.NonPos && Packet->Packet.getAddressAndType()==Target) { TgtIdx=Idx; return Packet; }
-    Idx++; if(Idx>=RelayQueueSize) Idx=0;
-    if(Idx==TgtIdx) break; }
-  return 0; }
 
 static void OLED_Target(uint32_t Target, uint8_t &TgtIdx, const GPS_Position &GPS)
 { Display.clear();
@@ -985,91 +924,6 @@ static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produ
 #endif
 
 // ===============================================================================================
-// Radio
-
-// OGNv1 SYNC:       0x0AF3656C encoded in Manchester
-static const uint8_t OGN1_SYNC[10] = { 0xAA, 0x66, 0x55, 0xA5, 0x96, 0x99, 0x96, 0x5A, 0x00, 0x00 };
-// OGNv2 SYNC:       0xF56D3738 encoded in Machester
-// static const uint8_t OGN2_SYNC[10] = { 0x55, 0x99, 0x96, 0x59, 0xA5, 0x95, 0xA5, 0x6A, 0x00, 0x00 };
-
-// ADS-L SYNC:       0xF5724B18 encoded in Manchester (fixed packet length 0x18 is included)
-static const uint8_t ADSL_SYNC[10] = { 0x55, 0x99, 0x95, 0xA6, 0x9A, 0x65, 0xA9, 0x6A, 0x00, 0x00 };
-
-// PilotAWare SYNC including the packet size and CRC seed
-static const uint8_t PAW_SYNC [10] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71, 0x00, 0x00 };
-
-static bool RF_Slot = 0;       // 0 = first TX/RX slot, 1 = second TX/RX slot
-static uint8_t RF_Channel = 0; // hopping channel
-
-static RadioEvents_t Radio_Events;
-
-static void Radio_TxDone(void)  // when transmission completed
-{ // Serial.printf("%d: Radio_TxDone()\n", millis());
-  OGN_TxConfig();
-  OGN_RxConfig();               // refresh the receiver configuration
-  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio.RxBoosted(0); }
-
-static void Radio_TxTimeout(void) // never happens, not clear under which conditions.
-{ // Serial.printf("%d: Radio_TxTimeout()\n", millis());
-  OGN_TxConfig();
-  OGN_RxConfig();
-  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio.RxBoosted(0); }
-
-static uint8_t RX_OGN_Packets=0;            // [packets] counts received packets
-
-static LDPC_Decoder      Decoder;      // decoder and error corrector for the OGN Gallager/LDPC code
-static RFM_FSK_RxPktData RxPktData;
-
-static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
-{ uint8_t Sec = (Time-Delay)%60; // Serial.printf("cleanTime(%d)\n", Sec);
-  RelayQueue.cleanTime(Sec); }             // remove packets 20(default) seconds into the past
-
-static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
-{ if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
-  XorShift64(Random.Word);                             // produce a new random number
-  uint8_t Idx=RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
-  if(RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
-  memcpy(Packet->Packet.Byte(), RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
-  Packet->Packet.Header.Relay=1;                      // increment the relay count (in fact we only do single relay)
-  // Packet->Packet.calcAddrParity();
-  if(!Packet->Packet.Header.Encrypted) Packet->Packet.Whiten(); // whiten but only for non-encrypted packets
-  Packet->calcFEC();                                  // Calc. the FEC code => packet ready for transmission
-  // PrintRelayQueue(Idx);  // for debug
-  RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
-  return 1; }
-
-static void Radio_RxTimeout(void)                     // end-of-receive-period: not used for now
-{ }
-
-static bool Radio_CAD = 0;
-
-static void Radio_CadDone(bool CAD)                   // when carrier sense completes
-{ Radio_CAD=CAD; }
-
-// a new packet has been received callback - this should probably be a quick call
-static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
-{ if(Size!=2*26) return;
-  RX_OGN_Packets++;
-  PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
-  SX126xGetPacketStatus(&RadioPktStatus);
-  RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;
-  RFM_FSK_RxPktData *RxPkt = RxFIFO.getWrite();                        // new packet in the RxFIFO
-  RxPkt->Time = GPS_PPS_UTC;                                           // [sec]
-  RxPkt->msTime = millis()-GPS_PPS_ms;                                 // [ms] time since PPS
-  RxPkt->Channel = 0x80 | RF_Channel;                                  // system:channel
-  RxPkt->RSSI = -2*RSSI;                                               // [-0.5dBm]
-  uint8_t PktIdx=0;
-  for(uint8_t Idx=0; Idx<26; Idx++)                                    // loop over packet bytes
-  { uint8_t ByteH = Packet[PktIdx++];
-    ByteH = ManchesterDecode[ByteH]; uint8_t ErrH=ByteH>>4; ByteH&=0x0F; // decode manchester, detect (some) errors
-    uint8_t ByteL = Packet[PktIdx++];
-    ByteL = ManchesterDecode[ByteL]; uint8_t ErrL=ByteL>>4; ByteL&=0x0F;
-    RxPkt->Data[Idx]=(ByteH<<4) | ByteL;
-    RxPkt->Err [Idx]=(ErrH <<4) | ErrL ; }
-  RxFIFO.Write();                                                      // put packet into the RxFIFO
-  Random.RX = (Random.RX*RSSI) ^ (~RSSI); XorShift64(Random.Word); }   // update random number
 
 static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
 { RFM_FSK_RxPktData *RxPkt = RxFIFO.getRead();                         // check for new received packets
@@ -1105,112 +959,6 @@ static void Radio_RxProcess(void)                                      // proces
   // if(Len>=8) { Line[Len-1]=0; Serial.println(Line); }
   RxFIFO.Read();
   LED_OFF(); }
-
-extern SX126x_t SX126x; // access to LoraWan102 driver parameters in LoraWan102/src/radio/radio.c
-
-// additional RF configuration reuired for OGN/ADS-L to work
-static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, RadioModShapings_t BT=MOD_SHAPING_G_BT_05)
-{ SX126x.ModulationParams.Params.Gfsk.ModulationShaping = BT;  // specific BT
-  SX126xSetModulationParams(&SX126x.ModulationParams);
-  SX126x.PacketParams.Params.Gfsk.SyncWordLength = SyncBytes*8;
-  SX126x.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;                   //
-  SX126xSetPacketParams(&SX126x.PacketParams);
-  SX126xSetSyncWord((uint8_t *)SyncWord); }
-
-static void OGN_TxConfig(void)
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
-  // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
-  Radio_UpdateConfig(OGN1_SYNC, 8); }
-
-#ifdef WITH_ADSL
-static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  Radio_UpdateConfig(ADSL_SYNC, 8); }
-#endif
-
-#ifdef WITH_PAW
-static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-12.5kHz, 38400bps, long preamble
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
-  Radio_UpdateConfig(PAW_SYNC, 8, MOD_SHAPING_G_BT_05); }
-#endif
-
-#ifdef WITH_FANET
-static void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         4,        5,              0,   1,   0, 0,          0,    100);
-                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
-  // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
-  // Radio.SetSyncWord(Sync);
-  Radio.SetSyncWord(0xF1); } // 0x00F1  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
-                             // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
-
-// there is an issue with the LoRa SYNC compatibility, some research on it is here:
-// https://blog.classycode.com/lora-sync-word-compatibility-between-sx127x-and-sx126x-460324d1787a
-// in short: SX1262 is not able to produce exact same SYNC as SX1276 set for SYNC=0xF1 but on receive both chips are tolerant to different SYNC
-
-static void FNT_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_LORA,     1,          7,        4, 0,        5,               16,              0, 0,   1,   0, 0,          0,    1);
-                 // Modem,     250kHz, Data-rate, Code-rate,  , preanble, RxSingle-timeout, variable/fixed, 0, CRC, hop,  , invert I/Q, continoue
-  Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
-#endif
-
-static void OGN_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 52, 0, 0, 0, 0, true);
-  // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadLen [bytes], CRC [bool],
-  // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
-  Radio_UpdateConfig(OGN1_SYNC+1, 7); }
-
-#ifdef WITH_ADSL
-static void ADSL_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true); // same as OGN just different packet size
-  Radio_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
-#endif
-
-// Manchester encode packet data
-static int Manchester(uint8_t *TxData, const uint8_t *PktData, int PktLen)
-{ int TxLen=0;
-  for(int Idx=0; Idx<PktLen; Idx++)
-  { uint8_t Byte=PktData[Idx];
-    TxData[TxLen++]=ManchesterEncode[Byte>>4];                      // software manchester encode every byte
-    TxData[TxLen++]=ManchesterEncode[Byte&0x0F]; }
-  return TxLen; }
-
-// transmit Data with Manchester encoding optionally followed by a signature (without Manchester), setup already assumed done
-static int Transmit(const uint8_t *Data, uint8_t PktLen=26, const uint8_t *Sign=0, uint8_t SignLen=68)
-{ static uint8_t TxPacket[2*26+64+4];                                  // buffer to fit manchester encoded packet and the digital signature
-  int TxLen = Manchester(TxPacket, Data, PktLen);
-  if(SignLen && Sign)
-  { for(uint8_t Idx=0; Idx<SignLen; Idx++)                            // digital signature
-    { uint8_t Byte=Sign[Idx];
-      TxPacket[TxLen++]=Byte; }                                       // copy the bytes directly, without Manchester encoding
-  }
-  Radio.Send(TxPacket, TxLen);
-  return TxLen; }
-
-// transmit OGN packet with possible signature
-static int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68)
-{ OGN_TxConfig();
-  return Transmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
-
-#ifdef WITH_ADSL
-// transmit ADS-L packet with possible signature
-static int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68) // transmit an ADS-L packet
-{ ADSL_TxConfig();
-  return Transmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
-#endif
-
-#ifdef WITH_PAW
-// transmit PilotAWare packet
-static int PAW_Transmit(const PAW_Packet &TxPacket)
-{ PAW_TxConfig();
-  uint8_t Packet[TxPacket.Size+2];
-  for(uint8_t Idx=0; Idx<TxPacket.Size; Idx++)
-  { Packet[Idx] = TxPacket.Byte[Idx]; }
-  PAW_Packet::Whiten(Packet, TxPacket.Size);
-  Packet[TxPacket.Size] = PAW_Packet::CRC8(Packet, TxPacket.Size);
-  Radio.Send(Packet, TxPacket.Size+1);
-  return TxPacket.Size+1; }
-#endif
 
 // ===============================================================================================
 
@@ -1395,21 +1143,7 @@ void setup()
   pinMode(GPIO12, INPUT);                            // GPS PPS and/or LED
   // attachInterrupt(GPIO12, GPS_HardPPS, RISING);      //
 
-  // Serial.println("GPS started");
-  Radio_FreqPlan.setPlan(Parameters.FreqPlan);       // set the frequency plan from the parameters
-
-  Radio_Events.TxDone    = Radio_TxDone;             // Radio events
-  Radio_Events.TxTimeout = Radio_TxTimeout;
-  Radio_Events.RxDone    = Radio_RxDone;
-  Radio_Events.CadDone   = Radio_CadDone;
-  Radio_Events.RxTimeout = Radio_RxTimeout;
-  Radio.Init(&Radio_Events);
-
-  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));  // set on default frequency
-  OGN_TxConfig();
-  OGN_RxConfig();
-  Radio.RxBoosted(0);
-  // Serial.println("Radio started\n");
+  Radio_Init();
   Random.RX  ^= Radio.Random();
   Random.GPS ^= Radio.Random();
   XorShift64(Random.Word);
