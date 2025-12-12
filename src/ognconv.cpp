@@ -275,6 +275,9 @@ void TEA_Decrypt_Key0 (uint32_t* Data, int Loops)
 // ==============================================================================================
 // XXTEA encryption/decryption
 
+// #pragma GCC push_options
+// #pragma GCC optimize ("O2")
+
 static uint32_t XXTEA_MX(uint8_t E, uint32_t Y, uint32_t Z, uint8_t P, uint32_t Sum, const uint32_t Key[4])
 { return ((((Z>>5) ^ (Y<<2)) + ((Y>>3) ^ (Z<<4))) ^ ((Sum^Y) + (Key[(P&3)^E] ^ Z))); }
 
@@ -336,6 +339,8 @@ void XXTEA_Decrypt_Key0(uint32_t *Data, uint8_t Words, uint8_t Loops)
     Y = Data[0] -= XXTEA_MX_KEY0(Y, Z, Sum);
     Sum -= Delta; }
 }
+
+// #pragma GCC pop_options // for -O2
 
 // ==============================================================================================
 

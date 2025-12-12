@@ -27,7 +27,9 @@
 #include "ogn1.h"    // OGN v1
 #include "ogn2.h"    // OGN v2
 #include "adsl.h"    // ADS-L
+#ifdef WITH_FANET
 #include "fanet.h"
+#endif
 #include "gdl90.h"
 
 #include "atmosphere.h"
@@ -35,15 +37,15 @@
 // ---------------------------------------------------------------------------------------------------------------------
 
 template <class OGNx_Packet, class OGNy_Packet>
- static bool OGN_isSignif(const OGNx_Packet *Packet, const OGNy_Packet *PrevPacket)       // is significant: decide whether to store it or not
+ bool OGN_isSignif(const OGNx_Packet *Packet, const OGNy_Packet *PrevPacket)       // is significant: decide whether to store it or not
 { if(PrevPacket==0) return 1;
   int8_t TimeDelta = Packet->Position.Time - PrevPacket->Position.Time;
   if(TimeDelta<0) TimeDelta+=60;                                              // [sec] time since previous  packet
-  if(TimeDelta>=20) return 1;                                                 // [sec]
+  if(TimeDelta>=20) return 1;                                                 // [sec] if more than 20sec time diff. then return  "yes"
   int16_t Climb = Packet->DecodeClimbRate();                                  // [0.1m/s]
   if(abs(Climb)>=100) return 1;                                               // if climb/decent rate more than 10m/s
   int32_t AltDelta=Packet->DecodeAltitude()-PrevPacket->DecodeAltitude();     // [m] altitude change
-  if(abs(AltDelta)>=20)  return 1;                                            // if more than 50m altitude change
+  if(abs(AltDelta)>=20)  return 1;                                            // if more than 20m altitude change
   int16_t PrevClimb = PrevPacket->DecodeClimbRate();                          // [0.1m/s]
   int32_t DistDeltaV = (int32_t)(Climb-PrevClimb)*TimeDelta;                  // [0.1m]
   if(abs(DistDeltaV)>=200) return 1;                                          // if climb doistance >= 20m
@@ -59,7 +61,6 @@ template <class OGNx_Packet, class OGNy_Packet>
   int32_t DistDeltaR = abs(CFaccel-PrevCFaccel)*(int32_t)TimeDelta*TimeDelta/2; // [0.1m]
   if(abs(DistDeltaR)>=200) return 1;                                          // [0.1m]
   return 0; }
-
 
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -129,7 +130,7 @@ template <class OGNx_Packet=OGN1_Packet>
      }
      return Bytes; }
 */
-} ;
+} /* __attribute__((packed)) */ ;
 
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -147,7 +148,7 @@ template <class OGNx_Packet>
      { uint8_t SNR : 6;        // [dB]
        uint8_t Prot: 1;
        uint8_t Rx  : 1;        // received or (own) transmitted ?
-     } ;
+     } __attribute__((packed)) ;
    } ;
    uint8_t    Check;           // simple control sum
 
@@ -166,7 +167,7 @@ template <class OGNx_Packet>
      return Check^0xA5; }
    void setCheck(void) { Check=calcCheck(); }
    bool isCorrect(void) const { return calcCheck()==Check; }
-} ;
+} __attribute__((packed)) ;
 
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -190,7 +191,7 @@ template <class OGNx_Packet=OGN1_Packet>
        bool Correct :1;   // correctly received or corrected by FEC
        uint8_t RxErr:4;   // number of bit errors corrected upon reception
        uint8_t Warn :2;   // LookOut warning level
-     } ;
+     } __attribute__((packed)) ;
    } ;
 
    uint8_t RxChan;        // RF channel where the packet was received
@@ -235,6 +236,8 @@ template <class OGNx_Packet=OGN1_Packet>
            +Count1s(Packet.Data[3]^RefPacket.Packet.Data[3])
            +Count1s(FEC[0]^RefPacket.FEC[0])
            +Count1s((FEC[1]^RefPacket.FEC[1])&0xFFFF); }
+
+   uint8_t PosTime(void) const { return Packet.Position.Time; }
 
    void calcRelayRank(int32_t RxAltitude)                               // [m] altitude of reception
    { if(Packet.Header.Emergency) { Rank=0xFF; return; }                 // emergency packets always highest rank
@@ -429,7 +432,7 @@ template <class OGNx_Packet=OGN1_Packet>
    { int32_t LatDist=0, LonDist=0;
      if(Packet.calcDistanceVector(LatDist, LonDist, RefLat, RefLon, LatCos)<0) return 0;     // return zero, when distance too large
      int32_t AltDist = Packet.DecodeAltitude()-RefAlt;
-     return WritePFLAA(NMEA, Status, LatDist, LonDist, AltDist, Status); }                            // return number of formatted characters
+     return WritePFLAA(NMEA, Status, LatDist, LonDist, AltDist, Status); }                   // return number of formatted characters
 
    uint8_t WritePFLAA(char *NMEA, uint8_t Status, int32_t LatDist, int32_t LonDist, int32_t AltDist)
    { uint8_t Len=0;
@@ -452,18 +455,28 @@ template <class OGNx_Packet=OGN1_Packet>
      Len+=Format_Hex(NMEA+Len, (uint8_t)(Addr>>16));                      // XXXXXX 24-bit address: RND, ICAO, FLARM, OGN
      Len+=Format_Hex(NMEA+Len, (uint16_t)Addr);
      NMEA[Len++]=',';
-     Len+=Format_UnsDec(NMEA+Len, Packet.DecodeHeading(), 4, 1);          // [deg] heading (by GPS)
+     Len+=Format_UnsDec(NMEA+Len, (uint32_t)Packet.DecodeHeading(), 4, 1);          // [deg] heading (by GPS)
      NMEA[Len++]=',';
-     Len+=Format_SignDec(NMEA+Len, Packet.DecodeTurnRate(), 2, 1);        // [deg/sec] turn rate
+     Len+=Format_SignDec(NMEA+Len, (int32_t)Packet.DecodeTurnRate(), 2, 1);        // [deg/sec] turn rate
      NMEA[Len++]=',';
-     Len+=Format_UnsDec(NMEA+Len, Packet.DecodeSpeed(), 2, 1);            // [approx. m/s] ground speed
+     Len+=Format_UnsDec(NMEA+Len, (uint32_t)Packet.DecodeSpeed(), 2, 1);            // [approx. m/s] ground speed
      NMEA[Len++]=',';
-     Len+=Format_SignDec(NMEA+Len, Packet.DecodeClimbRate(), 2, 1);       // [m/s] climb/sink rate
+     Len+=Format_SignDec(NMEA+Len, (int32_t)Packet.DecodeClimbRate(), 2, 1);       // [m/s] climb/sink rate
      NMEA[Len++]=',';
      NMEA[Len++]=HexDigit(Packet.Position.AcftType);                      // [0..F] aircraft-type: 1=glider, 2=tow plane, etc.
      Len+=NMEA_AppendCheckCRNL(NMEA, Len);
      NMEA[Len]=0;
      return Len; }                                                        // return number of formatted characters
+
+   uint8_t WriteAPRS(char *Msg, uint32_t Time, const char *ProtName="APRS")    // write an APRS position message
+   { uint8_t Len=Packet.WriteAPRS(Msg, Time, ProtName); if(Len==0) return Len;
+     Msg[Len++]=' ';
+     Len+=Format_UnsDec(Msg+Len, (uint32_t)RxErr);
+     Msg[Len++]='e';
+     Msg[Len++]=' ';
+     Len+=Format_SignDec(Msg+Len, (int32_t)-5*RxRSSI, 2, 1);
+     Len+=Format_String(Msg+Len, "dBm");
+     Msg[Len]=0; return Len; }
 
    void Print(void) const
    { printf("[%02d/%+6.1fdBm/%2d] ", RxChan, -0.5*RxRSSI, RxErr);
@@ -507,7 +520,7 @@ template <class OGNx_Packet=OGN1_Packet>
      { printf(" %02X", Packet.Byte()[Idx]); }
      printf(" (%d)\n", LDPC_Check(Packet.Byte())); }
 
-} ;
+} /* __attribute__((packed)) */ ;
 
 #ifdef WITH_PPM
 
@@ -573,11 +586,10 @@ class OGN_PPM_Packet                                        // OGN packet with F
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-template<class OGNx_Packet, uint8_t Size=8>
- class OGN_PrioQueue
+template<class PacketType, uint8_t Size=16>
+ class Relay_PrioQueue
 { public:
-   // static const uint8_t Size = 8;            // number of packets kept
-   OGN_RxPacket<OGNx_Packet> Packet[Size];   // OGN packets
+   PacketType           Packet[Size];        // OGN packets
    uint16_t             Sum;                 // sum of all ranks
    uint8_t              Low, LowIdx;         // the lowest rank and the index of it
 
@@ -587,7 +599,7 @@ template<class OGNx_Packet, uint8_t Size=8>
      { Packet[Idx].Clear(); }
      Sum=0; Low=0; LowIdx=0; }                                                // clear the rank sum, lowest rank
 
-   OGN_RxPacket<OGNx_Packet> * operator [](uint8_t Idx) { return Packet+Idx; }
+   PacketType * operator [](uint8_t Idx) { return Packet+Idx; }
 
    uint8_t getNew(void)                                                       // get (index of) a free or lowest rank packet
    { Sum-=Packet[LowIdx].Rank; Packet[LowIdx].Rank=0; Low=0; return LowIdx; } // remove old packet from the rank sum
@@ -598,8 +610,8 @@ template<class OGNx_Packet, uint8_t Size=8>
      { if(Packet[Idx].Alloc) Count++; }
      return Count; }
 
-   OGN_RxPacket<OGNx_Packet> *addNew(uint8_t NewIdx)                          // add the new packet to the queue
-   { OGN_RxPacket<OGNx_Packet> *Prev = 0;
+   PacketType *addNew(uint8_t NewIdx)                                         // add the new packet to the queue
+   { PacketType *Prev = 0;
      Packet[NewIdx].Alloc=1;                                                  // mark this clot as allocated
      uint32_t AddressAndType = Packet[NewIdx].Packet.getAddressAndType();     // get ID of this packet: ID is address-type and address (2+24 = 26 bits)
      for(uint8_t Idx=0; Idx<Size; Idx++)                                      // look for other packets with same ID
@@ -638,7 +650,7 @@ template<class OGNx_Packet, uint8_t Size=8>
    void cleanTime(uint8_t Time)                                                // clean up slots of given Time
    { for(int Idx=0; Idx<Size; Idx++)
      { if(Packet[Idx].Alloc==0) continue;
-       uint8_t PktTime=Packet[Idx].Packet.Position.Time;
+       uint8_t PktTime=Packet[Idx].PosTime(); // Packet.Position.Time;
        if( PktTime==Time || PktTime>=60) clean(Idx);
      }
    }
@@ -672,6 +684,8 @@ template<class OGNx_Packet, uint8_t Size=8>
 
 } ;
 
+// ---------------------------------------------------------------------------------------------------------------------
+
 class GPS_Time
 { public:
    int8_t  Year, Month, Day;    // Date (UTC) from GPS
@@ -683,13 +697,24 @@ class GPS_Time
    void setDefaultDate() { Year=00; Month=1; Day=1; } // default Date is 01-JAN-2000
    void setDefaultTime() { Hour=0;  Min=0;   Sec=0; mSec=0; } // default Time is 00:00:00.00
 
-   uint8_t FormatDate(char *Out, char Sep='.') const
+   uint8_t FormatDate_DDMMYY(char *Out, char Sep='.') const
    { uint8_t Len=0;
      Len+=Format_UnsDec(Out+Len, (uint32_t)Day, 2);
      Out[Len++]=Sep;
      Len+=Format_UnsDec(Out+Len, (uint32_t)Month, 2);
      Out[Len++]=Sep;
      Len+=Format_UnsDec(Out+Len, (uint32_t)Year, 2);
+     Out[Len]=0; return Len; }
+
+   uint8_t FormatDate_YYYYMMDD(char *Out, char Sep='.') const
+   { uint8_t Len=0;
+     Out[Len++]='2';
+     Out[Len++]='0';
+     Len+=Format_UnsDec(Out+Len, (uint32_t)Year, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, (uint32_t)Month, 2);
+     Out[Len++]=Sep;
+     Len+=Format_UnsDec(Out+Len, (uint32_t)Day, 2);
      Out[Len]=0; return Len; }
 
    uint8_t FormatTime(char *Out, char Sep=':') const
@@ -735,7 +760,7 @@ class GPS_Time
 
    int32_t calcTimeDiff(const GPS_Time &RefTime) const
    { int32_t TimeDiff = msDayTime() - RefTime.msDayTime();                                  // [ms]
-          if(TimeDiff<(-(int32_t)mSecsPerDay/2)) TimeDiff+=mSecsPerDay;                              // wrap-around one day
+          if(TimeDiff<(-(int32_t)mSecsPerDay/2)) TimeDiff+=mSecsPerDay;                     // wrap-around one day
      else if(TimeDiff>= (int32_t)mSecsPerDay/2 ) TimeDiff-=mSecsPerDay;
      return TimeDiff; }                                                                     // [ms]
 
@@ -815,27 +840,30 @@ class GPS_Time
     setUnixTime(Time);
     mSec = Time_ms-(uint64_t)Time*1000; }
 
+  void setUnixTime(double Time)
+  { setUnixTime_ms((uint64_t)floor(Time*1e3)); }
+
   uint64_t getUnixTime_ms(void) const
   { return (uint64_t)getUnixTime()*1000 + mSec; }
 
-   int8_t ReadTime(const char *Value)                         // read the Time field: HHMMSS.sss and check if it is a new one or the same one
+   int8_t ReadTime(const char *Value, const char *Sep=":.")   // read the Time field: HHMMSS.sss and check if it is a new one or the same one
    { int8_t Prev; int8_t Same=1;
      Prev=Hour;
-     Hour=Read_Dec2(Value);  if(Hour<0) return -1;            // read hour (two digits), return when invalid
+     Hour=Read_Dec2(Value); if(Hour<0) return -1;            // read hour (two digits), return when invalid
      if(Prev!=Hour) Same=0;
      Value+=2;
-     if(Value[0]==':') Value++;
+     if(Value[0]==Sep[0]) Value++;
      Prev=Min;
      Min=Read_Dec2(Value); if(Min<0)  return -1;            // read minute (two digits), return when invalid
      if(Prev!=Min) Same=0;
      Value+=2;
-     if(Value[0]==':') Value++;
+     if(Value[0]==Sep[0]) Value++;
      Prev=Sec;
      Sec=Read_Dec2(Value); if(Sec<0)  return -1;            // read second (two digits), return when invalid
      Value+=2;
      if(Prev!=Sec) Same=0;
      int16_t mPrev = mSec;
-     if(Value[0]=='.')                                        // is there a fraction
+     if(Value[0]==Sep[1])                                   // is there a fraction
      { uint16_t Frac=0; int8_t Len=Read_UnsDec(Frac, Value+1); if(Len<1) return -1; // read the fraction, return when invalid
             if(Len==1) mSec = Frac*100;
        else if(Len==2) mSec = Frac*10;
@@ -909,6 +937,7 @@ class GPS_Position: public GPS_Time
       bool hasGSV   :1;
       bool isReady  :1;         // is ready for the following treaement
       bool Sent     :1;         // has been transmitted
+      bool hasGeoidSepar;       // some GPSes do not send the Geoid Separation
       bool hasBaro  :1;         // pressure sensor information: pressure, standard pressure altitude, temperature
       bool hasHum   :1;         // has humidity (not all baro have humiditiy)
       bool hasClimb :1;         // has climb-rate computed or measured
@@ -920,8 +949,11 @@ class GPS_Position: public GPS_Time
     } ;
   } ;
 
-   // uint16_t SatSNRsum;          // sum of cSNR from GPGSV
-   // uint8_t SatSNRcount;         // count of satellites from GPGSV
+   uint16_t SatSNRsum;          // [dB] temporary sum of cSNR from GPGSV
+   uint8_t SatSNRcount;         // temporary count of satellites from GPGSV
+   uint8_t SatSNRgsv;           // temporary number of GSV
+   uint8_t SatSNR;              // [0.25dB] average satellites SNR
+   uint8_t SatSNRnum;           // [sats] number of satellites
 
    int8_t FixQuality;           // 0 = none, 1 = GPS, 2 = Differential GPS (can be WAAS)
    int8_t FixMode;              // 0 = not set (from GSA) 1 = none, 2 = 2-D, 3 = 3-D
@@ -966,7 +998,7 @@ class GPS_Position: public GPS_Time
    void Clear(void)
    { Flags=0; FixQuality=0; FixMode=0;
      PDOP=0; HDOP=0; VDOP=0;
-     // SatSNRsum=0; SatSNRcount=0;
+     SatSNRsum=0; SatSNRcount=0; SatSNR=0; SatSNRnum=0; SatSNRgsv=0;
      setDefaultDate(); setDefaultTime();
      Latitude=0; Longitude=0; LatitudeCosine=3000;
      Altitude=0; GeoidSeparation=0;
@@ -1068,7 +1100,7 @@ class GPS_Position: public GPS_Time
      { Out[Len++]=' '; Len+=Format_SignDec(Out+Len, (int32_t)Temperature, 2, 1); Out[Len++]='C';
        Out[Len++]=' '; Len+=Format_UnsDec(Out+Len, Pressure/4        ); Out[Len++]='P'; Out[Len++]='a';
        Out[Len++]=' '; Len+=Format_SignDec(Out+Len, StdAltitude, 2, 1); Out[Len++]='m'; }
-     Out[Len++]='\n'; Out[Len++]=0; return Len; }
+     Out[Len++]='\n'; Out[Len]=0; return Len; }
 #endif // __AVR__
 
    int8_t ReadUBX(UBX_RxMsg &RxMsg)
@@ -1110,22 +1142,20 @@ class GPS_Position: public GPS_Time
      return 1; }
 
    int8_t ReadNMEA(NMEA_RxMsg &RxMsg)
-   { // if(RxMsg.isGPGGA()) return ReadGGA(RxMsg);
-     if(RxMsg.isGxGGA()) return ReadGGA(RxMsg);
-     // if(RxMsg.isGPRMC()) return ReadRMC(RxMsg);
-     if(RxMsg.isGxRMC()) return ReadRMC(RxMsg);
-     // if(RxMsg.isGPGSA()) return ReadGSA(RxMsg);
-     if(RxMsg.isGxGSA()) return ReadGSA(RxMsg);
-     if(RxMsg.isPGRMZ()) return ReadPGRMZ(RxMsg); // (pressure) altitude
-     // if(RxMsg.isGxGSV()) return ReadGSV(RxMsg);
+   { if(RxMsg.isGxGSV())                 return ReadGSV(RxMsg);
+     if(RxMsg.isGxGGA()) { calcSatSNR(); return ReadGGA(RxMsg); }
+     if(RxMsg.isGxGSA())                 return ReadGSA(RxMsg);
+     if(RxMsg.isGxRMC()) { calcSatSNR(); return ReadRMC(RxMsg); }
+     if(RxMsg.isPGRMZ())                 return ReadPGRMZ(RxMsg); // (pressure) altitude
      return 0; }
 
    int8_t ReadNMEA(const char *NMEA)
    { int Err=0;
-     Err=ReadGGA(NMEA); if(Err!=(-1)) return Err;
-     Err=ReadGSA(NMEA); if(Err!=(-1)) return Err;
-     Err=ReadRMC(NMEA); if(Err!=(-1)) return Err;
-     // Err=ReadGSV(NMEA); if(Err!=(-1)) return Err;
+     Err=ReadGSV(NMEA); if(Err!=(-1))                 return Err;
+     Err=ReadGGA(NMEA); if(Err!=(-1)) { calcSatSNR(); return Err; }
+     Err=ReadGSA(NMEA); if(Err!=(-1))                 return Err;
+     Err=ReadRMC(NMEA); if(Err!=(-1)) { calcSatSNR(); return Err; }
+     Err=ReadPGRMZ(NMEA); if(Err!=(-1))                 return Err;
      return 0; }
 
    int8_t ReadPGRMZ(NMEA_RxMsg &RxMsg)
@@ -1136,13 +1166,25 @@ class GPS_Position: public GPS_Time
      hasBaro=1; Pressure=0; Temperature=0;
      if(Unit=='m' || Unit=='M') return 1;
      if(Unit!='f' && Unit!='F') return -1;
-     StdAltitude = (StdAltitude*312+512)>>10;
+     StdAltitude = FeetToMeters(StdAltitude);
+     return 1; }
+
+   int8_t ReadPGRMZ(const char *PGRMZ)
+   { if(memcmp(PGRMZ, "$PGRMZ", 6)!=0) return -1;
+     uint8_t Index[10]; if(IndexNMEA(Index, PGRMZ)<3) return -2;                           // index parameters and check the sum
+     int8_t Ret=Read_Float1(StdAltitude, PGRMZ+Index[0]);
+     if(Ret<=0) return -1;
+     char Unit=(PGRMZ+Index[1])[0];
+     hasBaro=1; Pressure=0; Temperature=0;
+     if(Unit=='m' || Unit=='M') return 1;
+     if(Unit!='f' && Unit!='F') return -1;
+     StdAltitude = FeetToMeters(StdAltitude);
      return 1; }
 
    int8_t ReadGGA(NMEA_RxMsg &RxMsg)
    { if(RxMsg.Parms<14) return -2;                                                        // no less than 14 paramaters
-     hasGPS = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the RMC says
-     FixQuality =Read_Dec1(*RxMsg.ParmPtr(5)); if(FixQuality<0) FixQuality=0;             // fix quality: 0=invalid, 1=GPS, 2=DGPS
+     hasGPS = hasTime = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the RMC says
+     FixQuality = Read_Dec1(*RxMsg.ParmPtr(5)); if(FixQuality<0) FixQuality=0;             // fix quality: 0=invalid, 1=GPS, 2=DGPS
      Satellites=Read_Dec2((const char *)RxMsg.ParmPtr(6));                                // number of satellites
      if(Satellites<0) Satellites=Read_Dec1(RxMsg.ParmPtr(6)[0]);
      if(Satellites<0) Satellites=0;
@@ -1153,6 +1195,20 @@ class GPS_Position: public GPS_Time
      ReadGeoidSepar(*RxMsg.ParmPtr(11), (const char *)RxMsg.ParmPtr(10));                 // Geoid separation
      calcLatitudeCosine();
      NMEAframes++; return 1; }
+
+   uint8_t WriteLK8EX1(char *NMEA, uint32_t BattVolt)
+   { uint8_t Len=Format_String(NMEA, "$LK8EX1,");
+     if(hasBaro) Len+=Format_UnsDec(NMEA+Len, (Pressure+2)/4);       // [Pa] pressure
+     NMEA[Len++]=',';
+     if(hasBaro) Len+=Format_SignDec(NMEA+Len, (StdAltitude+5)/10, 1, 0, 1);
+     NMEA[Len++]=',';
+     if(hasClimb) Len+=Format_SignDec(NMEA+Len, (int32_t)ClimbRate, 2, 1, 1);  // [cm/s] climb/sink rate (by GPS or pressure sensor)
+     NMEA[Len++]=',';
+     if(hasBaro) Len+=Format_SignDec(NMEA+Len, (int32_t)Temperature, 2, 1, 1); // [degC] temperature
+     NMEA[Len++]=',';
+     Len+=Format_UnsDec(NMEA+Len, BattVolt, 4, 3);                    // [mV] Battery voltage
+     Len+=NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0; return Len; }
 
    uint8_t WritePGRMZ(char *NMEA)
    { uint8_t Len=Format_String(NMEA, "$PGRMZ,");
@@ -1172,7 +1228,7 @@ class GPS_Position: public GPS_Time
      NMEA[Len++]=',';
      if(isValid()) Len+=Format_UnsDec(NMEA+Len, (uint32_t)VDOP, 2, 1);
      Len += NMEA_AppendCheckCRNL(NMEA, Len);
-     NMEA[Len]=0; return Len; }
+     return Len; }
 
    uint8_t WriteRMC(char *NMEA) const
    { uint8_t Len=Format_String(NMEA+Len, "$GPRMC,");
@@ -1211,7 +1267,7 @@ class GPS_Position: public GPS_Time
      NMEA[Len++]=',';
      NMEA[Len++]=isValid()?'A':'N';
      Len += NMEA_AppendCheckCRNL(NMEA, Len);
-     NMEA[Len]=0; return Len; }
+     return Len; }
 
    uint8_t WriteGGA(char *NMEA) const
    { uint8_t Len=Format_String(NMEA+Len, "$GPGGA,");
@@ -1251,13 +1307,13 @@ class GPS_Position: public GPS_Time
      NMEA[Len++]=',';
      NMEA[Len++]=',';
      Len += NMEA_AppendCheckCRNL(NMEA, Len);
-     NMEA[Len]=0; return Len; }
+     return Len; }
 
    int8_t ReadGGA(const char *GGA)
    { if( (memcmp(GGA, "$GPGGA", 6)!=0) && (memcmp(GGA, "$GNGGA", 6)!=0) ) return -1;                                           // check if the right sequence
      uint8_t Index[20]; if(IndexNMEA(Index, GGA)<14) return -2;                           // index parameters and check the sum
-     hasGPS = ReadTime(GGA+Index[0])>0;
-     FixQuality =Read_Dec1(GGA[Index[5]]); if(FixQuality<0) FixQuality=0;                 // fix quality
+     hasGPS = hasTime = ReadTime(GGA+Index[0])>0;
+     FixQuality = Read_Dec1(GGA[Index[5]]); if(FixQuality<0) FixQuality=0;                 // fix quality
      Satellites=Read_Dec2(GGA+Index[6]);                                                  // number of satellites
      if(Satellites<0) Satellites=Read_Dec1(GGA[Index[6]]);
      if(Satellites<0) Satellites=0;
@@ -1285,20 +1341,42 @@ class GPS_Position: public GPS_Time
      ReadHDOP(GSA+Index[15]);
      ReadVDOP(GSA+Index[16]);
      NMEAframes++; return 1; }
-/*
+
    int8_t ReadGSV(NMEA_RxMsg &RxMsg)
-   { //
-     return 1; }
+   { if(RxMsg.Parms<4) return -1;
+     for( int Parm=3; Parm<RxMsg.Parms-4; )
+     { int8_t PRN =Read_Dec2((const char *)RxMsg.ParmPtr(Parm++)); if(PRN<=0) break;      // PRN number
+       int8_t Elev=Read_Dec2((const char *)RxMsg.ParmPtr(Parm++)); if(Elev<0) break;      // [deg] elevation
+      int16_t Azim=Read_Dec3((const char *)RxMsg.ParmPtr(Parm++)); if(Azim<0) break;      // [deg] azimuth
+       int8_t SNR =Read_Dec2((const char *)RxMsg.ParmPtr(Parm++)); if(SNR<=0) continue;   // [dB] SNR or absent when not tracked
+       SatSNRsum+=SNR; SatSNRcount++; }
+     SatSNRgsv++; return 1; }
 
    int8_t ReadGSV(const char *GSV)
-   { if( (memcmp(GSV, "$GPGSV", 6)!=0) && (memcmp(GSV, "$GNGSV", 6)!=0) ) return -1;      // check if the right sequence
-     uint8_t Index[24]; if(IndexNMEA(Index, GSV)<20) return -2;                           // index parameters and check the sum
-     //
-     return 1; }
-*/
+   { if(GSV[0]!='$') return -1;
+     if(memcmp(GSV+3, "GSV", 3)!=0) return -1;
+     if(GSV[1]!='G' && GSV[1]!='B') return -1;
+     uint8_t Index[24]; int8_t Parms=IndexNMEA(Index, GSV);
+     if(Parms<4) return -2;                                             // index parameters and check the sum
+     for( int Parm=3; Parm<Parms-4; )                                   // up to 4 sats per packet
+     { int8_t PRN =Read_Dec2(GSV+Index[Parm++]); if(PRN<=0) break;      // PRN number
+       int8_t Elev=Read_Dec2(GSV+Index[Parm++]); if(Elev<0) break;      // [deg] elevation
+      int16_t Azim=Read_Dec3(GSV+Index[Parm++]); if(Azim<0) break;      // [deg] azimuth
+       int8_t SNR =Read_Dec2(GSV+Index[Parm++]); if(SNR<=0) continue;   // [dB] SNR or absent when not tracked
+       SatSNRsum+=SNR; SatSNRcount++; }
+     SatSNRgsv++; return 1; }
+
+   void calcSatSNR(void)
+   { if(SatSNRgsv==0) return;
+     if(SatSNRcount) SatSNR=(SatSNRsum*4+SatSNRcount/2)/SatSNRcount;
+                else SatSNR=0;
+     SatSNRnum=SatSNRcount;
+     SatSNRcount=0; SatSNRsum=0;
+     SatSNRgsv=0; }
+
    int ReadRMC(NMEA_RxMsg &RxMsg)
    { if(RxMsg.Parms<11) return -2;                                                        // no less than 12 parameters
-     hasGPS = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the GGA says
+     hasGPS = hasTime = ReadTime((const char *)RxMsg.ParmPtr(0))>0;                                 // read time and check if same as the GGA says
      if(ReadDate((const char *)RxMsg.ParmPtr(8))<0) setDefaultDate();                     // date
      ReadLatitude(*RxMsg.ParmPtr(3), (const char *)RxMsg.ParmPtr(2));                     // Latitude
      ReadLongitude(*RxMsg.ParmPtr(5), (const char *)RxMsg.ParmPtr(4));                    // Longitude
@@ -1310,7 +1388,7 @@ class GPS_Position: public GPS_Time
    int8_t ReadRMC(const char *RMC)
    { if( (memcmp(RMC, "$GPRMC", 6)!=0) && (memcmp(RMC, "$GNRMC", 6)!=0) ) return -1;      // check if the right sequence
      uint8_t Index[20]; if(IndexNMEA(Index, RMC)<11) return -2;                           // index parameters and check the sum
-     hasGPS = ReadTime(RMC+Index[0])>0;
+     hasGPS = hasTime = ReadTime(RMC+Index[0])>0;
      if(ReadDate(RMC+Index[8])<0) setDefaultDate();
      ReadLatitude( RMC[Index[3]], RMC+Index[2]);
      ReadLongitude(RMC[Index[5]], RMC+Index[4]);
@@ -1422,6 +1500,20 @@ class GPS_Position: public GPS_Time
    //  180    0x066FF300      0x80000000   0x7FFFBC00
    static int32_t getFANETcordic(int32_t Coord) { return ((int64_t)Coord*83399317+(1<<21))>>22; } // [0.0001/60 deg] => [FANET cordic]
 
+   int getHorAcc(void)
+   { int Acc=0;
+     if(Satellites==0 || HDOP==0 || !isValid()) return Acc;
+     Acc = (HDOP*16+4)/(IntSqrt(Satellites)*8);
+     if(Acc<1) Acc=1;
+     return Acc; }
+
+   int getVerAcc(void)
+   { int Acc=0;
+     if(Satellites==0 || VDOP==0 || !isValid()) return Acc;
+     Acc = (VDOP*16+4)/(IntSqrt(Satellites)*8);
+     if(Acc<1) Acc=1;
+     return Acc; }
+#ifdef WITH_FANET
    void EncodeAirPos(FANET_Packet &Packet, uint8_t AcftType=1, bool Track=1) const
    { int32_t Alt = Altitude; if(Alt<0) Alt=0; else Alt=(Alt+5)/10;
      int32_t Lat = getFANETcordic(Latitude);                                     // Latitude:  [0.0001/60deg] => [cordic]
@@ -1431,13 +1523,14 @@ class GPS_Position: public GPS_Time
      Packet.setAirPos(FNTtype[AcftType&0x0F], Track, Lat, Lon, Alt, (((uint16_t)Heading<<4)+112)/225, Speed, ClimbRate, TurnRate);
      if(hasBaro) { Packet.setQNE((StdAltitude+5)/10); }
    }
-
-   void Encode(GDL90_REPORT &Report) const
+#endif
+   void Encode(GDL90_REPORT &Report, bool FakeAlt=0) const
    { Report.setAccuracy(9, 9);
      int32_t Lat = getCordicLatitude();                                     // Latitude:  [0.0001/60deg] => [cordic]
      int32_t Lon = getCordicLongitude();                                    // Longitude: [0.0001/60deg] => [cordic]
      int32_t Alt = Altitude;                                                // [0.1m]
      if(hasBaro) Alt = StdAltitude;
+     if(FakeAlt) Alt = Altitude+GeoidSeparation;                            //
      Alt=MetersToFeet(Alt); Alt=(Alt+5)/10;                                 // [feet]
      Report.setLatitude(Lat);
      Report.setLongitude(Lon);
@@ -1469,7 +1562,7 @@ class GPS_Position: public GPS_Time
     //        else  Packet.clrClimb();
     Packet.setTrack(((uint32_t)Heading*32+112)/225);
     Packet.Integrity[0]=0; Packet.Integrity[1]=0;
-    if((FixQuality>0)&&(FixMode>=2))
+    if(FixQuality>0 && FixMode>0)
     { Packet.setHorAccur((HDOP*2+5)/10);
       Packet.setVerAccur((VDOP*3+5)/10); }
   }
@@ -1514,6 +1607,45 @@ class GPS_Position: public GPS_Time
      Packet.Status.Humidity=0;
    }
 */
+   void EncodeTelemetry(ADSL_Packet &Packet) const
+   { uint8_t TimeStamp = Sec%15;
+     TimeStamp <<= 2;
+     TimeStamp += mSec/250;
+     Packet.Telemetry.Header.TimeStamp = TimeStamp;
+     Packet.Telemetry.GPS.FixQuality = FixQuality<3 ? FixQuality:3;
+     Packet.Telemetry.GPS.Satellites = Satellites<15 ? Satellites:15;
+     uint8_t DOP = PDOP; if(DOP==0) DOP=HDOP;
+     DOP = (DOP*2+2)/5; if(DOP>15) DOP=15;
+     Packet.Telemetry.GPS.DOP=DOP;
+     uint8_t SNR=0;
+     if(SatSNRnum)
+     { SNR = (SatSNR+2)/4;                                   // encode number of satellites and SNR in the Status packet
+       if(SNR>10) { SNR-=10; if(SNR>31) SNR=31; }
+             else { SNR=0; }
+     }
+     Packet.Telemetry.GPS.SNR=SNR;
+     if(hasBaro)
+     { Packet.Telemetry.Baro.Pressure = (Pressure+16)>>5;
+       if(isValid())
+       { int32_t HeightDiff=(Altitude+GeoidSeparation)-StdAltitude;    // [0.1m]
+         HeightDiff/=10;
+              if(HeightDiff>511) HeightDiff=511;
+         else if(HeightDiff<(-511)) HeightDiff=(-511);
+         Packet.Telemetry.Baro.HeightDiff=HeightDiff; }
+       else Packet.Telemetry.Baro.HeightDiff=(-512);
+       int32_t Temp=(Temperature+2)/5;
+            if(Temp>127) Temp=127;
+       else if(Temp<(-127)) Temp=(-127);
+       Packet.Telemetry.Baro.Temperature=Temp;
+       if(hasHum) Packet.Telemetry.Baro.Humidity = ((int32_t)Humidity<<6)/1000;
+             else Packet.Telemetry.Baro.Humidity = 0;     }
+     else                                                              // if no pressure/temperature sensor
+     { Packet.Telemetry.Baro.Pressure    =    0;
+       Packet.Telemetry.Baro.Humidity    =    0;
+       Packet.Telemetry.Baro.Temperature = -128;
+       Packet.Telemetry.Baro.HeightDiff  = -512; }
+   }
+
   template <class OGNx_Packet>
    void EncodeStatus(OGNx_Packet &Packet) const
    { Packet.Status.ReportType=0;
@@ -1690,7 +1822,7 @@ class GPS_Position: public GPS_Time
      char LonW = Out[Len-2];
      Out[Len-2]=Out[Len-3]; Out[Len-3]=Out[Len-4]; Out[Len-4]='.';
      Out[Len++]=Icon[1];
-     Len+=Format_UnsDec(Out+Len, (uint32_t)Heading/10, 3);                              // [deg] Heading
+     Len+=Format_UnsDec(Out+Len, (uint32_t)Heading/10, 3);                    // [deg] Heading
      Out[Len++]='/';
      Len+=Format_UnsDec(Out+Len, ((uint32_t)Speed*199+512)>>10, 3);           // [kt] speed
      Out[Len++] = '/'; Out[Len++] = 'A'; Out[Len++] = '='; Len+=Format_UnsDec(Out+Len, ((uint32_t)MetersToFeet(Altitude)+5)/10, 6); // [feet] altitude
@@ -1740,7 +1872,7 @@ class GPS_Position: public GPS_Time
      { Len+=WriteIGCcoord(Out+Len, Latitude, 2, "NS");            // DDMM.MMM latitude
        Len+=WriteIGCcoord(Out+Len, Longitude, 3, "EW");           // DDDMM.MMM longitude
        Out[Len++] = FixMode>2 ? 'A':'V'; }                        // fix mode
-     else Len+=Format_String(Out+Len, "                    ");    // is position not valid then leave empty
+     else Len+=Format_String(Out+Len, "                 V");      // is position not valid then leave empty
      if(hasBaro)                                                  // if pressure data is there
      { int32_t Alt = StdAltitude/10;                              // [m] pressure altitude
        if(Alt<0) { Alt = (-Alt); Out[Len++] = '-'; Len+=Format_UnsDec(Out+Len, (uint32_t)Alt, 4); } // -AAAA (when negative)
@@ -1753,7 +1885,7 @@ class GPS_Position: public GPS_Time
      } else Len+=Format_String(Out+Len, "     ");
      Out[Len++]='\n'; Out[Len]=0; return Len; }
 
-  private:
+  // private:
 
    int8_t ReadLatitude(char Sign, const char *Value)
    { int8_t Deg=Read_Dec2(Value); if(Deg<0) return -1;
@@ -1786,7 +1918,9 @@ class GPS_Position: public GPS_Time
 
    int8_t ReadGeoidSepar(char Unit, const char *Value)
    { if(Unit!='M') return -1;
-     return Read_Float1(GeoidSeparation, Value); }   // GeoidSepar units: 0.1 meter
+     int8_t Len=Read_Float1(GeoidSeparation, Value); // GeoidSepar units: 0.1 meter
+     hasGeoidSepar=Len>0;                            // some GPSes miss the Geoid Seapration value
+     return Len; }
 
    int8_t ReadSpeed(const char *Value)
    { int32_t Knots;

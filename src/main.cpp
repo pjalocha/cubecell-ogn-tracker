@@ -127,9 +127,6 @@ FlashParameters Parameters;       // parameters stored in Flash: address, aircra
 
 static void Button_ForceActive(void);
 
-// static void OGN_TxConfig(void);
-// static void OGN_RxConfig(void);
-
 // ===============================================================================================
 
 static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every second
@@ -237,7 +234,8 @@ static void VextOFF(void)                  // Vext default OFF
 // ===============================================================================================
 
 const int RelayQueueSize = 32;
-static OGN_PrioQueue<OGN1_Packet, RelayQueueSize> RelayQueue;  // candidate packets to be relayed
+__attribute__((aligned(4)))
+static Relay_PrioQueue<OGN_RxPacket<OGN1_Packet>, RelayQueueSize> RelayQueue;  // candidate packets to be relayed
 
 static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
 { for( uint8_t Idx=TgtIdx; ; )
@@ -642,7 +640,7 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
 { Display.clear();
   Display.setFont(ArialMT_Plain_16);
   if(GPS.isTimeValid())
-  { uint8_t Len = GPS.FormatDate(Line, '.'); }
+  { uint8_t Len = GPS.FormatDate_DDMMYY(Line, '.'); }
   else { strcpy(Line, " no date "); }
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
   Display.drawString(128, 0, Line);                           // 1st line right corner: date
@@ -889,15 +887,9 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   return 1; }
 
 #ifdef WITH_FANET
-
-// static uint8_t FNT_Seq = 0x00; // to search for correct sync word
-
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
 { if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
   Packet.setAddress(Parameters.Address);
-  // char Seq[20]; sprintf(Seq, "Sync:%02X", FNT_Seq);
-  // Serial.println(Seq);
-  // Packet.setName(Seq);
   GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
   return 1; }
 #endif
@@ -925,11 +917,8 @@ static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produ
 
 // ===============================================================================================
 
-static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
-{ RFM_FSK_RxPktData *RxPkt = RxFIFO.getRead();                         // check for new received packets
-  if(RxPkt==0) return;
-  LED_Green();                                                         // green flash
-  uint8_t RxPacketIdx  = RelayQueue.getNew();                          // get place for this new packet
+static void Radio_RxProcOGN(FSK_RxPacket *RxPkt)
+{ uint8_t RxPacketIdx  = RelayQueue.getNew();                          // get place for this new packet
   OGN_RxPacket<OGN1_Packet> *RxPacket = RelayQueue[RxPacketIdx];
   uint8_t DecErr = RxPkt->Decode(*RxPacket, Decoder);                  // LDPC FEC decoder
   // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
@@ -957,6 +946,16 @@ static void Radio_RxProcess(void)                                      // proces
   // RxPkt->Print(CONS_UART_Write, 1);
   // uint8_t Len=RxPacket->WritePOGNT(Line);
   // if(Len>=8) { Line[Len-1]=0; Serial.println(Line); }
+}
+
+static void Radio_RxProcess(void)                                      // process packets in the RxFIFO
+{ FSK_RxPacket *RxPkt = RxFIFO.getRead();                              // check for new received packets
+  if(RxPkt==0) return;
+  LED_Green();                                                         // green flash
+  // Serial.printf("Radio_RxProcess() SysID:%d->", RxPkt->SysID);
+  RxPkt->DecodeSysID();
+  // Serial.printf("%d\n", RxPkt->SysID);
+  if(RxPkt->SysID==Radio_SysID_OGN) Radio_RxProcOGN(RxPkt);            // process OGN packet
   RxFIFO.Read();
   LED_OFF(); }
 
@@ -1156,16 +1155,18 @@ void setup()
   SignKey.PrintKeys();
 #endif
 
-  Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
-  OGN_TxConfig();
-  OGN_RxConfig();
-  Radio.RxBoosted(0);
+  // Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
+  // OGN_TxConfig();
+  // OGN_RxConfig();
+  // Radio.RxBoosted(0);
 
-  RX_RSSI.Set(-2*110);
+  // RX_RSSI.Set(-2*110);
 }
 
+__attribute__((aligned(4)))
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket; // OGN position, status and info packets
 #ifdef WITH_ADSL
+__attribute__((aligned(4)))
 static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
 #endif
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
@@ -1238,7 +1239,7 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_FANET
     if(getFNTpacket(FNT_TxPacket, GPS))                       // produce FANET position packet
     { if(FNT_BackOff) FNT_BackOff--;                          // if successful (within altitude limit)
-      else if(Radio_FreqPlan.Plan<=1) FNT_Freq=Radio_FreqPlan.getFreqFNT(GPS_PPS_UTC);
+      else if(Radio_FreqPlan.Plan<=1) FNT_Freq=Radio_FreqPlan.getFreqFANET();
     }
 /*
     if(FNT_Freq)
@@ -1313,16 +1314,19 @@ static void StartRFslot(void)                                     // start the T
 #endif
 */
   RF_Slot=0;
+  RF_SysID=Radio_SysID_OGN_ADSL; // Radio_SysID_OGN;
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
-  OGN_TxConfig();
-  OGN_RxConfig();
-  // Serial.printf("StartRFslot() #3\n");
+  Radio_TxConfig(RF_SysID);
+  Radio_RxConfig(RF_SysID);
+  // Serial.printf("StartRFslot() Sys:%d Chan:%d\n", RF_SysID, RF_Channel);
   Radio.RxBoosted(0);
+  XorShift64(Random.Word);
   TxTime0 = Random.RX  % 389;                                 // transmit times within slots
   TxTime1 = Random.GPS % 299;
   TxPkt0=TxPkt1=0;
   if(TxPos) TxPkt0 = TxPkt1 = &TxPosPacket;
+  XorShift64(Random.Word);
   static uint8_t InfoTxBackOff=0;
   static uint8_t InfoToggle=0;
   if(InfoTxBackOff) InfoTxBackOff--;
@@ -1451,12 +1455,12 @@ void loop()
       TxPkt0=0; }
     else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { RF_Slot=1;
-      OGN_TxConfig();
-      OGN_RxConfig();
+      Radio_TxConfig(RF_SysID);
+      Radio_RxConfig(RF_SysID);
       RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
       Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
       Radio.RxBoosted(0);
-      // printf("Slot #1: %d\r\n", SysTime);
+      // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
   { if(TxPkt1 && SysTime >= TxTime1)
