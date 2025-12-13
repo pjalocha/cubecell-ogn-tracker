@@ -905,7 +905,7 @@ static uint32_t MeshtHash(uint32_t X)
   X ^= X>>16;
   return X; }
 
-static int getMSHpacket(MESHT_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
+static int getMSHpacket(MESHT_Packet &Packet, const GPS_Position &GPS) // encode position into Meshtastic packet
 { int OK=Packet.setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
   if(!OK) return 0;
   Mesht_GPS.Clear();
@@ -1282,9 +1282,9 @@ static void StartRFslot(void)                                     // start the T
     GPS_Random_Update(GPS);
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
-#ifdef WITH_FANET
+#ifdef WITH_MESHT
     if(getMSHpacket(MSH_TxPacket, GPS))                       // produce Meshtastic position packet
-    { if(MSH_BackOff) MSH_BackOff--;           // if successful
+    { if(MSH_BackOff) MSH_BackOff--;                          // if successful
       else if(FNT_BackOff && Radio_FreqPlan.Plan<=1) MSH_Freq=Radio_FreqPlan.getFreqOBAND();
     }
     if(MSH_Freq)
