@@ -59,6 +59,10 @@
 #ifdef WITH_FANET
 #include "fanet.h"
 #endif
+#ifdef WITH_MESHT
+#include "mesht-proto.h"
+#include "mesht.h"
+#endif
 
 // ===============================================================================================
 // #define WITH_DIG_SIGN
@@ -886,6 +890,39 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.TxPower = TxPower;
   return 1; }
 
+#ifdef WITH_MESHT
+
+__attribute__((aligned(4)))
+static MeshtProto_GPS Mesht_GPS;
+__attribute__((aligned(4)))
+static AES128 AES;
+
+static uint32_t MeshtHash(uint32_t X)
+{ X ^= X>>16;
+  X *= 0x85ebca6b;
+  X ^= X>>13;
+  X *= 0xc2b2ae35;
+  X ^= X>>16;
+  return X; }
+
+static int getMSHpacket(MESHT_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
+{ int OK=Packet.setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
+  if(!OK) return 0;
+  Mesht_GPS.Clear();
+  Mesht_GPS.Time = GPS.getUnixTime();
+  Mesht_GPS.Lat = (int64_t)GPS.Latitude*50/3;
+  Mesht_GPS.Lon = (int64_t)GPS.Longitude*50/3;
+  Mesht_GPS.AltMSL = (GPS.Altitude+5)/10; Mesht_GPS.hasAltMSL=Mesht_GPS.AltMSL>0;
+  Mesht_GPS.Speed  = (GPS.Speed+5)/10; Mesht_GPS.hasSpeed=1;
+  Mesht_GPS.Track  =  GPS.Heading*10; Mesht_GPS.hasTrack=1;
+  Mesht_GPS.Prec_bits=32;
+  int Len=MeshtProto::EncodeGPS(Packet.getMeshtMsg(), Mesht_GPS);
+  Packet.Len=Packet.HeaderSize+Len;
+  Packet.Header.PktID ^= MeshtHash(Packet.Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
+  OK=Packet.encryptMeshtMsg(AES);
+  return OK; }
+#endif
+
 #ifdef WITH_FANET
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
 { if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
@@ -1186,6 +1223,12 @@ static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
 static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
 static  uint8_t FNT_BackOff=0;               // [sec]
 #endif
+#ifdef WITH_MESHT
+__attribute__((aligned(4)))
+static MESHT_Packet MSH_TxPacket;            // Meshtastic packet to transmit
+static uint32_t MSH_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
+static  uint8_t MSH_BackOff=0;               // [sec]
+#endif
 
 #ifdef WITH_PAW
 static PAW_Packet PAW_TxPacket;              // PAW packet to transmit
@@ -1218,6 +1261,9 @@ static void StartRFslot(void)                                     // start the T
   BMP280_Read(GPS);
 #endif
   bool TxPos=0;
+#ifdef WITH_MESHT
+  MSH_Freq=0;
+#endif
 #ifdef WITH_FANET
   FNT_Freq=0;
 #endif
@@ -1237,10 +1283,28 @@ static void StartRFslot(void)                                     // start the T
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_FANET
+    if(getMSHpacket(MSH_TxPacket, GPS))                       // produce Meshtastic position packet
+    { if(MSH_BackOff) MSH_BackOff--;           // if successful
+      else if(FNT_BackOff && Radio_FreqPlan.Plan<=1) MSH_Freq=Radio_FreqPlan.getFreqOBAND();
+    }
+    if(MSH_Freq)
+    { MSH_TxConfig();
+      Radio.SetChannel(MSH_Freq);
+      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);
+      MSH_BackOff = 50 + Random.RX%21;
+      MSH_Freq=0; }
+#endif
+#ifdef WITH_FANET
     if(getFNTpacket(FNT_TxPacket, GPS))                       // produce FANET position packet
     { if(FNT_BackOff) FNT_BackOff--;                          // if successful (within altitude limit)
       else if(Radio_FreqPlan.Plan<=1) FNT_Freq=Radio_FreqPlan.getFreqFANET();
     }
+    if(FNT_Freq)
+    { FNT_TxConfig();
+      Radio.SetChannel(FNT_Freq);
+      Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
+      FNT_BackOff = 9 + Random.RX%3;
+      FNT_Freq=0; }
 /*
     if(FNT_Freq)
     { // Serial.println("FNT:Tx");
@@ -1475,6 +1539,7 @@ void loop()
       else
 #endif
       {
+/*
 #ifdef WITH_FANET
         if(FNT_Freq)
         { FNT_TxConfig();
@@ -1484,6 +1549,7 @@ void loop()
           FNT_Freq=0; }
         else
 #endif
+*/
         { TxLen=OGN_Transmit(*TxPkt1); }
       }
 // #endif

@@ -26,8 +26,9 @@ extern LDPC_Decoder      Decoder;
 void Radio_TxConfig(uint8_t SysID);
 void Radio_RxConfig(uint8_t SysID);
 
-// inline void OGN_TxConfig(void) { Radio_TxConfig(Radio_SysID_OGN); }
-// inline void OGN_RxConfig(void) { Radio_RxConfig(Radio_SysID_OGN); }
+#ifdef WITH_MESHT
+void MSH_TxConfig(void);
+#endif
 #ifdef WITH_FANET
 void FNT_TxConfig(void);
 #endif

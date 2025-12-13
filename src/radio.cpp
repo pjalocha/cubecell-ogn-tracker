@@ -156,6 +156,17 @@ static int PAW_Transmit(const PAW_Packet &TxPacket)
 
 #endif // OBSOLETE
 
+#ifdef WITH_MESHT
+void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz bandwidth, SF7, preamble:8, sync:0x2B, explicit header,
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower+8, 0,     1,          7,         4,        8,              0,   1,   0, 0,          0,    100);
+                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
+  // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
+  // Radio.SetSyncWord(Sync);
+  Radio.SetSyncWord(0x2B); } // 0x002B  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+                             // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
+
+#endif
+
 #ifdef WITH_FANET
 void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
 { Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         4,        5,              0,   1,   0, 0,          0,    100);
