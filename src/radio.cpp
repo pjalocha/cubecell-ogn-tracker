@@ -6,6 +6,10 @@
 #include "LoRaWan_APP.h"
 #include "sx126x.h"
 
+extern "C" {
+#include "sx126x-board.h"
+}
+
 #include "manchester.h"
 #include "paw.h"
 
@@ -162,7 +166,11 @@ void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz b
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
-  Radio.SetSyncWord(0x2B); } // 0x002B  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+  SX126xWriteRegister(REG_LR_SYNCWORD  , 0x24);
+  SX126xWriteRegister(REG_LR_SYNCWORD+1, 0xB4);
+  //Radio.SetSyncWord(0x2B44);
+}
+                             // 0x002B  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
                              // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
 
 #endif
@@ -173,7 +181,11 @@ void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, 
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
-  Radio.SetSyncWord(0xF1); } // 0x00F1  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+  SX126xWriteRegister(REG_LR_SYNCWORD  , 0xF4);  // only this method worked to set SYNC=0xF1 for FANET
+  SX126xWriteRegister(REG_LR_SYNCWORD+1, 0x14);
+  // Radio.SetSyncWord(0xF414);                  // attempts here did not work
+}
+                             // 0x00F1  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
                              // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
 
 // there is an issue with the LoRa SYNC compatibility, some research on it is here:
@@ -183,7 +195,7 @@ void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, 
 void FNT_RxConfig(void)
 { Radio.SetRxConfig(MODEM_LORA,     1,          7,        4, 0,        5,               16,              0, 0,   1,   0, 0,          0,    1);
                  // Modem,     250kHz, Data-rate, Code-rate,  , preanble, RxSingle-timeout, variable/fixed, 0, CRC, hop,  , invert I/Q, continoue
-  Radio.SetSyncWord(0x00F1); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
+  Radio.SetSyncWord(0xF144); }              // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
 #endif
 
 // Manchester encode packet data
