@@ -12,6 +12,9 @@
 // #define WITH_GPS_CONS // send the GPS NMEA to the console
 
 #include "Arduino.h"
+#undef min
+#undef max
+
 #include <Wire.h>
 
 #include "innerWdt.h"         // Watch-Dog Timer
@@ -23,6 +26,7 @@
 
 // #include "GPS_Air530.h"
 #include "GPS_Air530Z.h"
+#include "gps-satlist.h"
 
 #include "HT_SSD1306Wire.h"
 #include "CubeCell_NeoPixel.h"
@@ -225,7 +229,7 @@ static CubeCell_NeoPixel Pixels(1, RGB, NEO_GRB + NEO_KHZ800);                //
 
 // ===============================================================================================
 
-static char Line[256];                                                        // for OLED abd console printing
+static char Line[256];                     // for OLED and console printing
 
 static void VextON(void)                   // Vext controls OLED power
 { pinMode(Vext,OUTPUT);
@@ -367,6 +371,15 @@ static int CONS_Proc(void)
 // ===============================================================================================
 // Process GPS satelite data
 
+static GPS_SatList GPS_SatMon;                   // list of satellites for SNR monitoring
+
+static uint8_t    GPS_SatSNR = 0;                // [0.25dB] average SNR from the GSV sentences
+static uint8_t    GPS_SatCnt = 0;                // number of satelites in the above average
+
+// ===============================================================================================
+// Process GPS satelite data
+
+#ifdef OBSOLETE
 // Satellite count and SNR per system, 0=GPS, 1=GLONASS, 2=GALILEO, 3=BEIDO
 static uint16_t SatSNRsum  [4] = { 0, 0, 0, 0 }; // sum up the satellite SNR's
 static uint8_t  SatSNRcount[4] = { 0, 0, 0, 0 }; // sum counter
@@ -404,6 +417,7 @@ static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract sat
         else  GPS_SatSNR = 0;
   }
 }
+#endif // OBSOLETE
 
 // ===============================================================================================
 // Process GPS position data
@@ -446,12 +460,13 @@ static int GPS_Process(void)                           // process serial data st
     // GPS.encode(Byte);                                 // process character through the GPS NMEA interpreter
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
-    { if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
-      else
-      { GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
-        // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS sentens
-        // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); } // copy to the console, but this does not work, characters are being lost
-      }
+    { GPS_SatMon.Process(GpsNMEA);                    // process satellite data
+      GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
+      // { // if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
+      // // else
+      //   // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS sentens
+      //   // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); } // copy to the console, but this does not work, characters are being lost
+      // }
       GpsNMEA.Clear(); }
 #ifdef WITH_GPS_CONS
     Serial.write(Byte);                                // copy character to the console (no loss of characters here)
@@ -1237,6 +1252,19 @@ void setup()
   pinMode(GPIO12, INPUT);                            // GPS PPS and/or LED
   // attachInterrupt(GPIO12, GPS_HardPPS, RISING);      //
 
+  char GPS_Cmd[64];
+  uint8_t Len = Format_String(GPS_Cmd, "$PCAS03,1,0,1,1,1,0,0,0");
+  // $PCAS03,nGGA,nGLL,nGSA,nGSV,nRMC,nVTG,nZDA,nTXT // rate to send each NMEA type
+  Len += NMEA_AppendCheckCRNL(GPS_Cmd, Len);
+  GPS_Cmd[Len]=0;
+  Serial1.write(GPS_Cmd);
+
+  Len = Format_String(GPS_Cmd, "$PCAS04,7");
+  // $PCAS04,Mode      // 1=GPS, 2=BDS, 3=GPS+BDS, 4=GLONASS, 5=GPS+GLONASS, 6=BDS+GLONASS, 7=GPS+BDS+GLONASS
+  Len += NMEA_AppendCheckCRNL(GPS_Cmd, Len);
+  GPS_Cmd[Len]=0;
+  Serial1.write(GPS_Cmd);
+
   Radio_Init();
   Random.RX  ^= Radio.Random();
   Random.GPS ^= Radio.Random();
@@ -1256,6 +1284,8 @@ void setup()
   // Radio.RxBoosted(0);
 
   // RX_RSSI.Set(-2*110);
+
+  PrintPOGNS();
 }
 
 __attribute__((aligned(4)))
@@ -1542,7 +1572,12 @@ void loop()
   else
   { if(GPS_Idle>10)                                               // GPS stopped sending data
     { // printf("GPS slot stop: %d [ms]\n\r", millis());
+      GPS_SatMon.Sort();
+      GPS_SatCnt=GPS_SatMon.CalcStats(GPS_SatSNR);
       StartRFslot();                                              // start the next RF slot
+      if(GPS_PPS_UTC%10==0)
+      { GPS_SatMon.PrintStats(Line);
+        Serial.println(Line); }
       GPS_State.BurstDone=1; }
   }
 
