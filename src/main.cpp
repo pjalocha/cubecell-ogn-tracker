@@ -237,35 +237,57 @@ static void VextOFF(void)                  // Vext default OFF
 
 // ===============================================================================================
 
-const int RelayQueueSize = 32;
+const int RelayQueueSize = 16;
 __attribute__((aligned(4)))
-static Relay_PrioQueue<OGN_RxPacket<OGN1_Packet>, RelayQueueSize> RelayQueue;  // candidate packets to be relayed
+static Relay_PrioQueue<OGN_RxPacket<OGN1_Packet>, RelayQueueSize> OGN_RelayQueue;  // OGN candidate packets to be relayed
+#ifdef WITH_ADSL
+static Relay_PrioQueue<ADSL_RxPacket, RelayQueueSize>            ADSL_RelayQueue;  // ADSL candidate packets to be relayed
+#endif
 
 static const OGN_RxPacket<OGN1_Packet> *FindTarget(uint32_t Target, uint8_t &TgtIdx)
 { for( uint8_t Idx=TgtIdx; ; )
-  { const OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx;
+  { const OGN_RxPacket<OGN1_Packet> *Packet = OGN_RelayQueue.Packet+Idx;
     if(Packet->Alloc && !Packet->Packet.Header.NonPos && Packet->Packet.getAddressAndType()==Target) { TgtIdx=Idx; return Packet; }
     Idx++; if(Idx>=RelayQueueSize) Idx=0;
     if(Idx==TgtIdx) break; }
   return 0; }
 
-static void CleanRelayQueue(uint32_t Time, uint32_t Delay=20) // remove "old" packets from the relay queue
+static void CleanRelayQueue(uint32_t Time, uint32_t Delay=12) // remove "old" packets from the relay queue
 { uint8_t Sec = (Time-Delay)%60; // Serial.printf("cleanTime(%d)\n", Sec);
-  RelayQueue.cleanTime(Sec); }             // remove packets 20(default) seconds into the past
+  OGN_RelayQueue.cleanTime(Sec);               // remove packets 20(default) seconds into the past
+#ifdef WITH_ADSL
+  uint8_t qSec = Sec%15;
+  ADSL_RelayQueue.cleanTime(qSec<<2);
+#endif
+}
 
 static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a packet to be relayed
-{ if(RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
+{ if(OGN_RelayQueue.Sum==0) return 0;                     // if no packets in the relay queue
   XorShift64(Random.Word);                             // produce a new random number
-  uint8_t Idx=RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
-  if(RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
-  memcpy(Packet->Packet.Byte(), RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
+  uint8_t Idx=OGN_RelayQueue.getRand(Random.RX);          // get weight-random packet from the relay queue
+  if(OGN_RelayQueue.Packet[Idx].Rank==0) return 0;        // should not happen ...
+  memcpy(Packet->Packet.Byte(), OGN_RelayQueue[Idx]->Byte(), OGN_Packet::Bytes); // copy the packet
   Packet->Packet.Header.Relay=1;                      // increment the relay count (in fact we only do single relay)
   // Packet->Packet.calcAddrParity();
   if(!Packet->Packet.Header.Encrypted) Packet->Packet.Whiten(); // whiten but only for non-encrypted packets
   Packet->calcFEC();                                  // Calc. the FEC code => packet ready for transmission
   // PrintRelayQueue(Idx);  // for debug
-  RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
+  OGN_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
+
+#ifdef WITH_ADSL
+static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to be relayed
+{ if(ADSL_RelayQueue.Sum==0) return 0;                    // if no packets in the relay queue
+  XorShift32(Random.RX);                                  // produce a new random number
+  uint8_t Idx=ADSL_RelayQueue.getRand(Random.RX);         // get weight-random packet from the relay queue
+  if(ADSL_RelayQueue.Packet[Idx].Rank==0) return 0;       // should not happen ...
+  *Packet = ADSL_RelayQueue[Idx]->Packet;
+  Packet->setRelay();
+  Packet->Scramble();
+  Packet->setCRC();
+  ADSL_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
+  return 1; }
+#endif
 
 // ===============================================================================================
 // CONSole UART
@@ -316,7 +338,7 @@ static void CONS_CtrlC(void)
 
 static void CONS_CtrlR(void)
 { uint8_t Len=Format_String(Line, "Relay: ");
-  Len+=RelayQueue.Print(Line+Len);
+  Len+=OGN_RelayQueue.Print(Line+Len);
   Len--; Line[Len]=0; Serial.println(Line); }
 
 // const char CtrlB = 'B'-'@';
@@ -616,7 +638,7 @@ static void OLED_Relay(const GPS_Position &GPS)                 // display list 
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   uint8_t VertPos=0;
   for( uint8_t Idx=0; Idx<RelayQueueSize; Idx++)
-  { OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
+  { OGN_RxPacket<OGN1_Packet> *Packet = OGN_RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
     if(Packet->Packet.Header.NonPos) continue;                     // don't show non-position packets
     uint32_t Dist= IntDistance(Packet->LatDist, Packet->LonDist);      // [m]
     uint32_t Dir = IntAtan2(Packet->LonDist, Packet->LatDist);         // [16-bit cyclic]
@@ -765,7 +787,7 @@ static void OLED_RF(void)                 // display RF-related data
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
   Display.drawString(128, 16, Line);
 
-  Len=0; uint8_t Acfts = RelayQueue.size();
+  Len=0; uint8_t Acfts = OGN_RelayQueue.size();
   if(Acfts)
   { Len+=Format_UnsDec(Line+Len, (uint32_t)Acfts);
     Len+=Format_String(Line+Len, " Acft");
@@ -801,7 +823,7 @@ static uint32_t OLED_CurrTarget = 0;    // target aircraft being tracked
 static void OLED_NextTarget(void)       // switch to the next target
 { for(uint8_t Idx=OLED_CurrTgtIdx; ; )
   { Idx++; if(Idx>=RelayQueueSize) Idx=0; if(Idx==OLED_CurrTgtIdx) break;
-    OGN_RxPacket<OGN1_Packet> *Packet = RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
+    OGN_RxPacket<OGN1_Packet> *Packet = OGN_RelayQueue.Packet+Idx; if(Packet->Alloc==0) continue;
     if(Packet->Packet.Header.NonPos) continue;
     uint32_t AddressAndType = Packet->Packet.getAddressAndType();
     if(AddressAndType!=OLED_CurrTarget)
@@ -954,18 +976,51 @@ static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produ
 
 // ===============================================================================================
 
+#ifdef WITH_ADSL
+static void Radio_RxProcADSL(FSK_RxPacket *RxPkt)
+{ uint8_t RxPacketIdx  = ADSL_RelayQueue.getNew();                   // get place for this new packet
+  ADSL_RxPacket *RxPacket = ADSL_RelayQueue[RxPacketIdx];
+  int CorrErr=RxPkt->ErrCount();
+  if(RxPkt->Manchester) CorrErr=ADSL_Packet::Correct(RxPkt->Data, RxPkt->Err);
+  if(CorrErr<0) return;
+  memcpy(&(RxPacket->Packet.Version), RxPkt->Data, RxPacket->Packet.TxBytes-3);
+  RxPacket->RxErr   = CorrErr;
+  RxPacket->RxChan  = RxPkt->Channel;
+  RxPacket->RxRSSI  = RxPkt->RSSI;
+  RxPacket->Correct = 1;
+  RxPacket->Packet.Descramble();
+  if(!RxPacket->Packet.isPos()) return;
+  uint8_t AddrType = RxPacket->Packet.getAddrTable();
+  if(AddrType<4) AddrType=0;
+  else AddrType-=4;
+  uint8_t MyOwnPacket = ( RxPacket->Packet.getAddress()  == Parameters.Address )
+                     && (                       AddrType == Parameters.AddrType);
+  if(MyOwnPacket) return;                                                             // don't process my own (relayed) packets
+  if(GPS_Satellites)                                                                  // if GPS has a fix
+  { int32_t LatDist=0, LonDist=0;
+    bool DistOK = RxPacket->calcDistanceVector(LatDist, LonDist, GPS_Latitude, GPS_Longitude, GPS_LatCosine)>=0;
+    if(DistOK)                                                                          // reasonable reception distance
+    { RxPacket->LatDist=LatDist;
+      RxPacket->LonDist=LonDist;
+      RxPacket->calcRelayRank(GPS_Altitude/10);                                         // calculate the relay-rank (priority for relay)
+      ADSL_RxPacket *PrevRxPacket = ADSL_RelayQueue.addNew(RxPacketIdx);                // add to the relay queue and get the previ>
+    }
+  }
+}
+#endif
+
 static void Radio_RxProcOGN(FSK_RxPacket *RxPkt)
-{ uint8_t RxPacketIdx  = RelayQueue.getNew();                          // get place for this new packet
-  OGN_RxPacket<OGN1_Packet> *RxPacket = RelayQueue[RxPacketIdx];
+{ uint8_t RxPacketIdx  = OGN_RelayQueue.getNew();                          // get place for this new packet
+  OGN_RxPacket<OGN1_Packet> *RxPacket = OGN_RelayQueue[RxPacketIdx];
   uint8_t DecErr = RxPkt->Decode(*RxPacket, Decoder);                  // LDPC FEC decoder
   // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
   //         millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
-  if(DecErr || RxPacket->RxErr>=10 ) { RxFIFO.Read(); LED_OFF(); return; }              // if FEC not correctly decoded or too many bit errors then give up
+  if(DecErr || RxPacket->RxErr>=10 ) { /* RxFIFO.Read(); LED_OFF(); */ return; }              // if FEC not correctly decoded or too many bit errors then give up
   uint8_t OwnPacket = ( RxPacket->Packet.Header.Address  == Parameters.Address  )       // is it my own packet (through a relay) ?
                    && ( RxPacket->Packet.Header.AddrType == Parameters.AddrType );
   if(OwnPacket || RxPacket->Packet.Header.NonPos || RxPacket->Packet.Header.Encrypted) { RxFIFO.Read(); LED_OFF(); return; }
   RxPacket->Packet.Dewhiten();
-  if(GPS_Satellites)
+  if(GPS_Satellites)                                                  // if GPS has a fix
   { int32_t LatDist=0, LonDist=0;
     bool DistOK = RxPacket->Packet.calcDistanceVector(LatDist, LonDist, GPS_Latitude, GPS_Longitude, GPS_LatCosine)>=0;
     if(DistOK)
@@ -974,7 +1029,7 @@ static void Radio_RxProcOGN(FSK_RxPacket *RxPkt)
       // int32_t Alt = GPS_Altitude/10; if(Alt<0) Alt=0;
       RxPacket->calcRelayRank(GPS_Altitude/10);                    // calculate the relay-rank (priority for relay)
       // Serial.printf("GPS:%dm Pkt:%dm/%d => Rank:%d\r\n", GPS_Altitude/10, RxPacket->Packet.DecodeAltitude(), RxPacket->RxRSSI, RxPacket->Rank);
-      OGN_RxPacket<OGN1_Packet> *PrevRxPacket = RelayQueue.addNew(RxPacketIdx);
+      OGN_RxPacket<OGN1_Packet> *PrevRxPacket = OGN_RelayQueue.addNew(RxPacketIdx);
       // uint8_t Len=RxPacket->WritePOGNT(Line);
     }
   }
@@ -993,6 +1048,9 @@ static void Radio_RxProcess(void)                                      // proces
   RxPkt->DecodeSysID();
   // Serial.printf("%d\n", RxPkt->SysID);
   if(RxPkt->SysID==Radio_SysID_OGN) Radio_RxProcOGN(RxPkt);            // process OGN packet
+#if WITH_ADSL
+  if(RxPkt->SysID==Radio_SysID_ADSL) Radio_RxProcADSL(RxPkt);          // process ADS-L packet
+#endif
   RxFIFO.Read();
   LED_OFF(); }
 
@@ -1490,7 +1548,7 @@ void loop()
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
   if(RF_Slot==0)                                                  // while in the 1st sub-slot
-  { if(TxPkt0 && SysTime >= TxTime0)                              //
+  { if(TxPkt0 && SysTime >= TxTime0 && !Radio_TxRunning())        //
     { int TxLen=0;
 // #ifdef WITH_DIG_SIGN
 //       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
@@ -1527,7 +1585,7 @@ void loop()
       // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
-  { if(TxPkt1 && SysTime >= TxTime1)
+  { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())
     { int TxLen=0;
 // #ifdef WITH_DIG_SIGN
 //       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);

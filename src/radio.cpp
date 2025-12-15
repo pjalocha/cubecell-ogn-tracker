@@ -32,6 +32,10 @@ LowPass2<int32_t, 4,2,4> RX_RSSI;       // low pass filter to average the RX noi
 
 LDPC_Decoder      Decoder;
 
+bool Radio_isIdle   (void) { return Radio.GetStatus()==RF_IDLE; }
+bool Radio_TxRunning(void) { return Radio.GetStatus()==RF_TX_RUNNING; }
+bool Radio_RxRunning(void) { return Radio.GetStatus()==RF_RX_RUNNING; }
+
 static void Radio_TxDone(void)  // when transmission completed
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
   Radio_TxConfig(RF_SysID);
@@ -162,13 +166,13 @@ static int PAW_Transmit(const PAW_Packet &TxPacket)
 
 #ifdef WITH_MESHT
 void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz bandwidth, SF7, preamble:8, sync:0x2B, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower+8, 0,     1,          7,         4,        8,              0,   1,   0, 0,          0,    100);
-                 // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower+8, 0,     1,          7,         1,       12,              0,   1,   0, 0,          0,    100);
+                 // Modem,      Power,                 , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
-  SX126xWriteRegister(REG_LR_SYNCWORD  , 0x24);
+  SX126xWriteRegister(REG_LR_SYNCWORD  , 0x24);  // this should produce SYNC=0x2B for Meshtastic
   SX126xWriteRegister(REG_LR_SYNCWORD+1, 0xB4);
-  //Radio.SetSyncWord(0x2B44);
+  // Radio.SetSyncWord(0x2B44);
 }
                              // 0x002B  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
                              // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
@@ -177,7 +181,7 @@ void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz b
 
 #ifdef WITH_FANET
 void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         4,        5,              0,   1,   0, 0,          0,    100);
+{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);

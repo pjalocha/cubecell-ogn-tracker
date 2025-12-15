@@ -21,6 +21,10 @@ extern uint8_t RF_Channel;
 extern uint8_t RF_SysID;
 extern uint8_t RX_OGN_Packets;
 
+bool Radio_isIdle   (void);
+bool Radio_TxRunning(void);
+bool Radio_RxRunning(void);
+
 extern LDPC_Decoder      Decoder;
 
 void Radio_TxConfig(uint8_t SysID);
