@@ -279,20 +279,6 @@ static bool GetRelayPacket(OGN_TxPacket<OGN_Packet> *Packet)      // prepare a p
   OGN_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
-#ifdef WITH_ADSL
-static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to be relayed
-{ if(ADSL_RelayQueue.Sum==0) return 0;                    // if no packets in the relay queue
-  XorShift32(Random.RX);                                  // produce a new random number
-  uint8_t Idx=ADSL_RelayQueue.getRand(Random.RX);         // get weight-random packet from the relay queue
-  if(ADSL_RelayQueue.Packet[Idx].Rank==0) return 0;       // should not happen ...
-  *Packet = ADSL_RelayQueue[Idx]->Packet;
-  Packet->setRelay();
-  Packet->Scramble();
-  Packet->setCRC();
-  ADSL_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
-  return 1; }
-#endif
-
 // ===============================================================================================
 // CONSole UART
 
@@ -875,6 +861,53 @@ static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixel
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixels.show(); }
 // ===============================================================================================
+// ADS-L packets
+
+#ifdef WITH_ADSL
+static int getPosPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // encode position into an ADS-L packet
+{ Packet.Init();
+  Packet.setAddress    (Parameters.Address);
+  Packet.setAddrTypeOGN(Parameters.AddrType);
+  Packet.setAcftTypeOGN(Parameters.AcftType);
+  GPS.Encode(Packet);
+  return 1; }
+
+static bool getTelemSatSNR(ADSL_Packet &Packet)
+{ Packet.Init(0x42);
+  Packet.setAddress    (Parameters.Address);
+  Packet.setAddrTypeOGN(Parameters.AddrType);
+  Packet.setRelay(0);
+  Packet.Telemetry.Header.TelemType=0x3;                            // 3 = GPS telemetry
+  Packet.SatSNR.Header.GNSStype=0;                                  // 0 = GPS satellite SNR
+  for(uint8_t Sys=0; Sys<5; Sys++)
+  { Packet.SatSNR.Data.SatSNR[Sys]=GPS_SatMon.getSysStatus(Sys); }
+  Packet.SatSNR.Data.Inbalance = 0;
+  Packet.SatSNR.Data.PDOP = GPS_SatMon.PDOP;
+  Packet.SatSNR.Data.HDOP = GPS_SatMon.HDOP;
+  Packet.SatSNR.Data.VDOP = GPS_SatMon.VDOP;
+  return 1; }
+
+static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to be relayed
+{ if(ADSL_RelayQueue.Sum==0) return 0;                    // if no packets in the relay queue
+  XorShift32(Random.RX);                                  // produce a new random number
+  uint8_t Idx=ADSL_RelayQueue.getRand(Random.RX);         // get weight-random packet from the relay queue
+  if(ADSL_RelayQueue.Packet[Idx].Rank==0) return 0;       // should not happen ...
+  *Packet = ADSL_RelayQueue[Idx]->Packet;
+  Packet->setRelay();
+  // Packet->Scramble();
+  // Packet->setCRC();
+  ADSL_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
+  return 1; }
+
+static bool getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce an ADS-L packet
+{ static uint8_t BackOff=0;
+  if(BackOff) { BackOff--; return getPosPacket(Packet, GPS); }
+  BackOff=29+Random.RX%5;
+  return getTelemSatSNR(Packet); }
+
+#endif
+
+// ===============================================================================================
 // OGN packets
 
 static uint16_t InfoParmIdx = 0;                                       // the round-robin index to info records in info packets
@@ -977,17 +1010,6 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode
   Packet.Position.Stealth  = Parameters.Stealth;
   GPS.Encode(Packet);
   return 1; }
-
-#ifdef WITH_ADSL
-static int getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce position ADS-L packet
-{ Packet.Init();
-  Packet.setAddress    (Parameters.Address);
-  Packet.setAddrTypeOGN(Parameters.AddrType);
-  // Packet.setRelay(0);
-  Packet.setAcftTypeOGN(Parameters.AcftType);
-  GPS.Encode(Packet);
-  return 1; }
-#endif
 
 // ===============================================================================================
 
@@ -1292,7 +1314,7 @@ __attribute__((aligned(4)))
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket; // OGN position, status and info packets
 #ifdef WITH_ADSL
 __attribute__((aligned(4)))
-static ADSL_Packet ADSL_TxPosPacket;           // ADS-L position packet
+static ADSL_Packet ADSL_TxPacket;           // ADS-L packet to be transmitted
 #endif
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
@@ -1434,9 +1456,9 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_ADSL
     if(Radio_FreqPlan.Plan<=1)
     { ADSL_TxPkt = &TxPosPacket;
-      getAdslPacket(ADSL_TxPosPacket, GPS);
-      ADSL_TxPosPacket.Scramble();                              // this call hangs when -Os is used to compile
-      ADSL_TxPosPacket.setCRC();
+      getAdslPacket(ADSL_TxPacket, GPS);
+      ADSL_TxPacket.Scramble();                              // this call hangs when -Os is used to compile
+      ADSL_TxPacket.setCRC();
       ADSL_TxSlot = Random.GPS&0x20; }
     else ADSL_TxPkt=0;
 #endif
@@ -1591,7 +1613,7 @@ void loop()
 // #else
 #ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-      { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
+      { TxLen=ADSL_Transmit(ADSL_TxPacket); }
       else
 #endif
       {
@@ -1628,7 +1650,7 @@ void loop()
 // #else
 #ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-      { TxLen=ADSL_Transmit(ADSL_TxPosPacket); }
+      { TxLen=ADSL_Transmit(ADSL_TxPacket); }
       else
 #endif
       {
