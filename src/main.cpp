@@ -318,7 +318,7 @@ static void ConsNMEA_Process(void)                              // process NMEA 
   // printf("ConsNMEA_Process() - before .ReadPOGNS()\n\r" );
   Parameters.ReadPOGNS(ConsNMEA);                               // read parameter values given in $POGNS
   // printf("ConsNMEA_Process() - after .ReadPOGNS()\n\r" );
-  PrintParameters();                                            // print the new parameter values
+  // PrintParameters();                                            // print the new parameter values
   Parameters.WriteToFlash(); }                                  // write new parameter set to flash
 
 // static void CONS_CtrlB(void) { Serial.printf("Battery: %5.3fV %d%%\n", 0.001*BattVoltage, BattCapacity); }
@@ -1370,6 +1370,10 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_BMP280
   BMP280_Read(GPS);
 #endif
+  if(GPS.hasBaro)
+  { uint8_t Len=GPS.WritePGRMZ(Line);
+    Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
+    Serial.write((const uint8_t *)Line, Len); }
   bool TxPos=0;
 #ifdef WITH_MESHT
   MSH_Freq=0;
