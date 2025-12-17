@@ -196,7 +196,7 @@ static void BME280_Read(GPS_Position &GPS)       // read the pressure/temperatur
   GPS.StdAltitude = floorf(BaroAlt(Press)*10+0.5);
   GPS.hasBaro=1;
   float Hum   = BME280.readHumidity();           // [%]
-  GPS.Humidity    = floorf(Hum*10+0.5);           // [0.1 %]
+  GPS.Humidity    = floorf(Hum*10+0.5);          // [0.1 %]
   GPS.hasHum=1; }
 #endif
 
@@ -1370,6 +1370,10 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_BMP280
   BMP280_Read(GPS);
 #endif
+  uint8_t Len=sprintf(Line, "$POGNR,%d,%d,,%+4.1f,,,,%5.3f",
+                 Radio_FreqPlan.Plan, RX_OGN_Count64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
+  Len+=NMEA_AppendCheckCRNL(Line, Len);
+  Serial.write((const uint8_t *)Line, Len);
   if(GPS.hasBaro)
   { uint8_t Len=GPS.WritePGRMZ(Line);
     Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
