@@ -601,11 +601,11 @@ uint16_t StratuxPort;
     Len+=Format_String(Line+Len, ",StratuxHost=");
     Len+=Format_String(Line+Len, StratuxHost);
     Len+=Format_String(Line+Len, ",StratuxPort=");
-    Len+=Format_UnsDec(Line+Len, StratuxPort);
+    Len+=Format_UnsDec(Line+Len, (uint32_t)StratuxPort);
     Len+=Format_String(Line+Len, ",StratuxTxPwr=");
-    Len+=Format_SignDec(Line+Len, ((int16_t)10*StratuxTxPwr+2)>>2, 2, 1);
+    Len+=Format_SignDec(Line+Len, ((int32_t)10*StratuxTxPwr+2)>>2, 2, 1);
     Len+=Format_String(Line+Len, ",StratuxMinSig=");
-    Len+=Format_SignDec(Line+Len, (int16_t)StratuxMinSig);
+    Len+=Format_SignDec(Line+Len, (int32_t)StratuxMinSig);
     Len+=NMEA_AppendCheckCRNL(Line, Len);
     Line[Len]=0; return Len; }
 #endif
