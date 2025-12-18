@@ -404,7 +404,7 @@ static int GPS_Process(void)                           // process serial data st
     if(GpsNMEA.isComplete())                           // if NMEA is done
     { GPS_SatMon.Process(GpsNMEA);                    // process satellite data
       GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
-#ifndef WITH_STRATUX
+#ifndef WITH_GPS_NMEA_PASS
       if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS NMEA sentences
 #endif
       { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }  // copy to the console
