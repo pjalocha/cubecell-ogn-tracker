@@ -111,6 +111,7 @@ void Radio_TxConfig(uint8_t SysID)
 { const uint8_t *SYNC;
   uint8_t PktLen;
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
+  Radio.Standby();
   if(SysID==Radio_SysID_LDR) Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
                         else Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
@@ -133,13 +134,15 @@ void Radio_RxConfig(uint8_t SysID)
 
 #ifdef WITH_ADSL
 static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+{ Radio.Standby();
+  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(ADSL_SYNC, 8); }
 #endif
 
 #ifdef WITH_PAW
 static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-12.5kHz, 38400bps, long preamble
-{ Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
+{ Radio.Standby();
+  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(PAW_SYNC, 8, MOD_SHAPING_G_BT_05); }
 #endif
 
@@ -166,7 +169,8 @@ static int PAW_Transmit(const PAW_Packet &TxPacket)
 
 #ifdef WITH_MESHT
 void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz bandwidth, SF7, preamble:8, sync:0x2B, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower+8, 0,     1,          7,         1,       12,              0,   1,   0, 0,          0,    100);
+{ Radio.Standby();
+  Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower+8, 0,     1,          7,         1,       12,              0,   1,   0, 0,          0,    100);
                  // Modem,      Power,                 , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);
@@ -181,7 +185,8 @@ void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz b
 
 #ifdef WITH_FANET
 void FNT_TxConfig(void)              // setup for FANET: 250kHz bandwidth, SF7, preamble:5, sync:0xF1, explicit header,
-{ Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
+{ Radio.Standby();
+  Radio.SetTxConfig(MODEM_LORA, Parameters.TxPower, 0,     1,          7,         1,        5,              0,   1,   0, 0,          0,    100);
                  // Modem,      Power,               , 250kHz, Data-rate, Code-rate, preanble, variable/fixed, CRC, hop,  , invert I/Q, timeout [ms]
   // uint16_t Sync = FNT_Seq>>4; Sync<<=8; Sync |= FNT_Seq&0x0F; Sync<<=4; Sync |= 0x0404;
   // Radio.SetSyncWord(Sync);

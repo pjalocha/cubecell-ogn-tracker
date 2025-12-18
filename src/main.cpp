@@ -1307,7 +1307,7 @@ static int      RxRssiCount=0;              // count RSSI readouts
 static void StartRFslot(void)                                     // start the TX/RX time slot right after the GPS stops sending data
 { if(RxRssiCount) { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
 
-  // Serial.printf("StartRFslot() #0\n");
+  // Serial.printf("StartRFslot()\n");
   XorShift64(Random.Word);
   GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
   GPS_Satellites = GPS.Satellites;
@@ -1363,7 +1363,9 @@ static void StartRFslot(void)                                     // start the T
     if(MSH_Freq)
     { MSH_TxConfig();
       Radio.SetChannel(MSH_Freq);
-      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);
+      // uint32_t TxTime=micros();
+      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // tis call takes about 3ms but it only triggers the transmission
+      // TxTime=micros()-TxTime; Serial.printf("MSHtx:%uus\n", TxTime);
       MSH_BackOff = 50 + Random.RX%21;
       MSH_Freq=0; }
 #endif
@@ -1375,7 +1377,9 @@ static void StartRFslot(void)                                     // start the T
     if(FNT_Freq)
     { FNT_TxConfig();
       Radio.SetChannel(FNT_Freq);
+      // uint32_t TxTime=micros();
       Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
+      // TxTime=micros()-TxTime; Serial.printf("FNTtx:%uus\n", TxTime);
       FNT_BackOff = 9 + Random.RX%3;
       FNT_Freq=0; }
 /*
@@ -1450,13 +1454,17 @@ static void StartRFslot(void)                                     // start the T
     PAW_BackOff = 3 + Random.RX%3; }
 #endif
 */
+  uint8_t Wait=50;                    // [ms]
+  for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
+  { if(!Radio_TxRunning()) break;
+    delay(1); }
   RF_Slot=0;
-  RF_SysID=Radio_SysID_OGN_ADSL; // Radio_SysID_OGN;
+  RF_SysID=Radio_SysID_OGN_ADSL;      // receive OGN and ADS-L in parallel
   RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
   Radio_TxConfig(RF_SysID);
+  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
   Radio_RxConfig(RF_SysID);
-  // Serial.printf("StartRFslot() Sys:%d Chan:%d\n", RF_SysID, RF_Channel);
+  // Serial.printf("StartRFslot() Sys:%d Chan:%d Wait:%d\n", RF_SysID, RF_Channel, Wait);
   Radio.RxBoosted(0);
   XorShift64(Random.Word);
   TxTime0 = Random.RX  % 389;                                 // transmit times within slots
