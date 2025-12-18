@@ -918,6 +918,8 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
 #ifdef WITH_MESHT
 
 __attribute__((aligned(4)))
+static MeshtProto_NodeInfo Mesht_NodeInfo;
+__attribute__((aligned(4)))
 static MeshtProto_GPS Mesht_GPS;
 __attribute__((aligned(4)))
 static AES128 AES;
@@ -930,21 +932,44 @@ static uint32_t MeshtHash(uint32_t X)
   X ^= X>>16;
   return X; }
 
-static int getMSHpacket(MESHT_Packet &Packet, const GPS_Position &GPS) // encode position into Meshtastic packet
-{ int OK=Packet.setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
-  if(!OK) return 0;
-  Mesht_GPS.Clear();
-  Mesht_GPS.Time = GPS.getUnixTime();
-  Mesht_GPS.Lat = (int64_t)GPS.Latitude*50/3;
-  Mesht_GPS.Lon = (int64_t)GPS.Longitude*50/3;
-  Mesht_GPS.AltMSL = (GPS.Altitude+5)/10; Mesht_GPS.hasAltMSL=Mesht_GPS.AltMSL>0;
-  Mesht_GPS.Speed  = (GPS.Speed+5)/10; Mesht_GPS.hasSpeed=1;
-  Mesht_GPS.Track  =  GPS.Heading*10; Mesht_GPS.hasTrack=1;
+static int getMeshNodeInfo(void)
+{ Mesht_NodeInfo.Clear();
+  Mesht_NodeInfo.MAC=getUniqueID();
+  sprintf(Mesht_NodeInfo.ID,    "!%08x",   (uint32_t)Mesht_NodeInfo.MAC);
+  sprintf(Mesht_NodeInfo.Short, "%04x",    (uint16_t)Mesht_NodeInfo.MAC);
+  Mesht_NodeInfo.Role=5;                 // 5:tracker
+  /// Mesht_NodeInfo.Hardware=??
+  sprintf(Mesht_NodeInfo.Name, "OGN:%X:%s:%s", Parameters.AcftType, Parameters.Reg, Parameters.Pilot);
+  return 1; }
+
+static int getMeshtGPS(const GPS_Position *Position)
+{ Mesht_GPS.Clear();
+  Mesht_GPS.Time = Position->getUnixTime();
+  if(!Position->isValid()) return 0;
+  Mesht_GPS.Lat = (int64_t)Position->Latitude*50/3;
+  Mesht_GPS.Lon = (int64_t)Position->Longitude*50/3;
+  Mesht_GPS.AltMSL = (Position->Altitude+5)/10; Mesht_GPS.hasAltMSL=Mesht_GPS.AltMSL>0;
+  Mesht_GPS.Speed  = (Position->Speed+5)/10; Mesht_GPS.hasSpeed=1;
+  Mesht_GPS.Track  =  Position->Heading*10; Mesht_GPS.hasTrack=1;
   Mesht_GPS.Prec_bits=32;
-  int Len=MeshtProto::EncodeGPS(Packet.getMeshtMsg(), Mesht_GPS);
-  Packet.Len=Packet.HeaderSize+Len;
-  Packet.Header.PktID ^= MeshtHash(Packet.Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
-  OK=Packet.encryptMeshtMsg(AES);
+  return 1; }
+
+static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
+{ int OK=Packet->setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
+  if(!OK) return 0;
+  static uint8_t InfoBackOff=0;
+  int Len=0;
+  OK=getMeshtGPS(Position);
+  if(OK) Len=MeshtProto::EncodeGPS(Packet->getMeshtMsg(), Mesht_GPS);
+  if(InfoBackOff) InfoBackOff--;
+  if(!OK || InfoBackOff==0)
+  { OK=getMeshNodeInfo();
+    if(OK) Len=MeshtProto::EncodeNodeInfo(Packet->getMeshtMsg(), Mesht_NodeInfo);
+    InfoBackOff = 10+Random.RX%5; }
+  if(!OK || Len==0) return 0;
+  Packet->Len=Packet->HeaderSize+Len;
+  Packet->Header.PktID ^= MeshtHash(Packet->Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
+  OK=Packet->encryptMeshtMsg(AES);
   return OK; }
 #endif
 
@@ -1329,14 +1354,11 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_BMP280
   BMP280_Read(GPS);
 #endif
-  if(GPS.hasBaro)
-  { uint8_t Len=GPS.WritePGRMZ(Line);
-    Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
-    Serial.write((const uint8_t *)Line, Len); }
+  // if(GPS.hasBaro)
+  // { uint8_t Len=GPS.WritePGRMZ(Line);
+  //   Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
+  //   Serial.write((const uint8_t *)Line, Len); }
   bool TxPos=0;
-#ifdef WITH_MESHT
-  MSH_Freq=0;
-#endif
 #ifdef WITH_FANET
   FNT_Freq=0;
 #endif
@@ -1356,7 +1378,8 @@ static void StartRFslot(void)                                     // start the T
     XorShift64(Random.Word);
     // Serial.printf("Random: %08X:%08X\n", Random.RX, Random.GPS);
 #ifdef WITH_MESHT
-    if(getMSHpacket(MSH_TxPacket, GPS))                       // produce Meshtastic position packet
+    MSH_Freq=0;
+    if(getMeshtPacket(&MSH_TxPacket, &GPS))                   // produce Meshtastic position packet
     { if(MSH_BackOff) MSH_BackOff--;                          // if successful
       else if(FNT_BackOff && Radio_FreqPlan.Plan<=1) MSH_Freq=Radio_FreqPlan.getFreqOBAND();
     }
