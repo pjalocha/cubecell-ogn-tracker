@@ -363,49 +363,6 @@ static uint8_t    GPS_SatSNR = 0;                // [0.25dB] average SNR from th
 static uint8_t    GPS_SatCnt = 0;                // number of satelites in the above average
 
 // ===============================================================================================
-// Process GPS satelite data
-
-#ifdef OBSOLETE
-// Satellite count and SNR per system, 0=GPS, 1=GLONASS, 2=GALILEO, 3=BEIDO
-static uint16_t SatSNRsum  [4] = { 0, 0, 0, 0 }; // sum up the satellite SNR's
-static uint8_t  SatSNRcount[4] = { 0, 0, 0, 0 }; // sum counter
-
-static uint16_t   GPS_SatSNR = 0;                // [0.25dB] average SNR from the GSV sentences
-static uint8_t    GPS_SatCnt = 0;                // number of satelites in the above average
-
-static void ProcessGSV(NMEA_RxMsg &GSV)          // process GxGSV to extract satellite data
-{ uint8_t SatSys=0;
-       if(GSV.isGPGSV()) { SatSys=0; }
-  else if(GSV.isGLGSV()) { SatSys=1; }
-  else if(GSV.isGAGSV()) { SatSys=2; }
-  else if(GSV.isBDGSV()) { SatSys=3; }
-  else return;
-  if(GSV.Parms<3) return;
-  int8_t Pkts=Read_Dec1((const char *)GSV.ParmPtr(0)); if(Pkts<0) return;            // how many packets to pass all sats
-  int8_t Pkt =Read_Dec1((const char *)GSV.ParmPtr(1)); if(Pkt <0) return;            // which packet in the sequence
-  int8_t Sats=Read_Dec2((const char *)GSV.ParmPtr(2));                               // total number of satellites
-  if(Sats<0) Sats=Read_Dec1((const char *)GSV.ParmPtr(2));                           // could be a single or double digit number
-  if(Sats<0) return;
-  if(Pkt==1) { SatSNRsum[SatSys]=0; SatSNRcount[SatSys]=0; }                         // if 1st packet then clear the sum and counter
-  for( int Parm=3; Parm<GSV.Parms; )                                                 // up to 4 sats per packet
-  { int8_t PRN =Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(PRN <0) break;      // PRN number
-    int8_t Elev=Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(Elev<0) break;      // [deg] eleveation
-   int16_t Azim=Read_Dec3((const char *)GSV.ParmPtr(Parm++)); if(Azim<0) break;      // [deg] azimuth
-    int8_t SNR =Read_Dec2((const char *)GSV.ParmPtr(Parm++)); if(SNR<=0) continue;   // [dB] SNR or absent when not tracked
-    SatSNRsum[SatSys]+=SNR; SatSNRcount[SatSys]++; }                                 // add up SNR
-  if(Pkt==Pkts)                                                                      // if the last packet
-  { uint8_t Count=0; uint16_t Sum=0;
-    for(uint8_t Sys=0; Sys<4; Sys++)
-    { if(SatSNRcount[Sys]==0) continue;
-      Count+=SatSNRcount[Sys]; Sum+=SatSNRsum[Sys]; }
-    GPS_SatCnt = Count;
-    if(Count) GPS_SatSNR = (4*Sum+Count/2)/Count;
-        else  GPS_SatSNR = 0;
-  }
-}
-#endif // OBSOLETE
-
-// ===============================================================================================
 // Process GPS position data
 
 static int          GPS_Ptr = 0;       // 
@@ -443,20 +400,18 @@ static int GPS_Process(void)                           // process serial data st
   for( ; ; )
   { if(GPS.available()<=0) break;                      // if no more characters then give up
     uint8_t Byte=GPS.read();                           // read character
-    // GPS.encode(Byte);                                 // process character through the GPS NMEA interpreter
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
     { GPS_SatMon.Process(GpsNMEA);                    // process satellite data
       GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
-      // { // if(GpsNMEA.isGxGSV()) ProcessGSV(GpsNMEA);       // process satellite data
-      // // else
-      //   // if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS sentens
-      //   // { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); } // copy to the console, but this does not work, characters are being lost
-      // }
-      GpsNMEA.Clear(); }
-#ifdef WITH_GPS_CONS
-    Serial.write(Byte);                                // copy character to the console (no loss of characters here)
+#ifndef WITH_STRATUX
+      if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS NMEA sentences
 #endif
+      { GpsNMEA.Data[GpsNMEA.Len]=0; Serial.println((const char *)(GpsNMEA.Data)); }  // copy to the console
+      GpsNMEA.Clear(); }
+// #ifdef WITH_GPS_CONS                                   // char-by-char copy of the GPS output to the console
+//     Serial.write(Byte);                                // copy character to the console (no loss of characters here)
+// #endif
     Count++; }                                         // count processed characters
   return Count; }                                      // return number of processed characters
 
