@@ -1364,16 +1364,16 @@ static void StartRFslot(void)                                     // start the T
   RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
   RX_OGN_Packets=0;                                                           // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
+  { uint8_t Len=sprintf(Line, "$POGNR,%d,%d,,%+4.1f,,,,%5.3f",
+                   Radio_FreqPlan.Plan, RX_OGN_Count64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
+    Len+=NMEA_AppendCheckCRNL(Line, Len);
+    Serial.write((const uint8_t *)Line, Len); }
 #ifdef WITH_BME280
   BME280_Read(GPS);
 #endif
 #ifdef WITH_BMP280
   BMP280_Read(GPS);
 #endif
-  uint8_t Len=sprintf(Line, "$POGNR,%d,%d,,%+4.1f,,,,%5.3f",
-                 Radio_FreqPlan.Plan, RX_OGN_Count64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
-  Len+=NMEA_AppendCheckCRNL(Line, Len);
-  Serial.write((const uint8_t *)Line, Len);
   if(GPS.hasBaro)
   { uint8_t Len=GPS.WritePGRMZ(Line);
     Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
