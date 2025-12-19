@@ -1414,8 +1414,14 @@ static void StartRFslot(void)                                     // start the T
     if(MSH_Freq)
     { MSH_TxConfig();
       Radio.SetChannel(MSH_Freq);
-      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // this call takes about 3ms but it only triggers the transmission
-      MSH_BackOff = 50 + Random.RX%21;
+      Radio_CAD=0;
+      Radio.StartCad(2);
+      for( uint8_t Wait=10; Wait>0; Wait--)
+      { if(Radio.GetStatus()!=RF_CAD) break;
+        CONS_Proc(); }
+      if(!Radio_CAD)
+      { Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // this call takes about 3ms but it only triggers the transmission
+        MSH_BackOff = 50 + Random.RX%21; }
       MSH_Freq=0; }
 #endif
 #ifdef WITH_FANET
@@ -1426,9 +1432,11 @@ static void StartRFslot(void)                                     // start the T
     if(FNT_Freq)
     { FNT_TxConfig();
       Radio.SetChannel(FNT_Freq);
-      // Radio.SetCadParams(LORA_CAD_02_SYMBOL, 5+13, 10, LORA_CAD_ONLY, 0);
+      Radio_CAD=0;
       Radio.StartCad(2);
-      while(Radio.GetStatus()==RF_CAD) { CONS_Proc(); }
+      for( uint8_t Wait=10; Wait>0; Wait--)
+      { if(Radio.GetStatus()!=RF_CAD) break;
+        CONS_Proc(); }
       if(!Radio_CAD)
       { Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
         FNT_BackOff = 9 + Random.RX%3; }
