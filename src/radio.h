@@ -16,9 +16,9 @@ extern Delay<uint8_t, 64> RX_OGN_CountDelay;
 extern uint16_t           RX_OGN_Count64;
 extern LowPass2<int32_t, 4,2,4> RX_RSSI;
 
-extern    bool RF_Slot;
-extern uint8_t RF_Channel;
-extern uint8_t RF_SysID;
+extern    bool Radio_Slot;
+extern uint8_t Radio_Channel;
+extern uint8_t Radio_SysID;
 extern uint8_t RX_OGN_Packets;
 
 bool Radio_isIdle   (void);
@@ -37,9 +37,9 @@ void MSH_TxConfig(void);
 void FNT_TxConfig(void);
 #endif
 
-int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
+int OGN_ManchTx(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
 #ifdef WITH_ADSL
-int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
+int ADSL_ManchTx(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
 #endif
 
 void Radio_Init(void);

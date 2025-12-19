@@ -13,9 +13,9 @@ extern "C" {
 #include "manchester.h"
 #include "paw.h"
 
-bool    RF_Slot    = 0;             // 0 = first TX/RX slot, 1 = second TX/RX slot
-uint8_t RF_Channel = 0;             // hopping channel
-uint8_t RF_SysID   = 0;             // current system: OGN/ADS-L/LDR
+bool    Radio_Slot    = 0;             // 0 = first TX/RX slot, 1 = second TX/RX slot
+uint8_t Radio_Channel = 0;             // hopping channel
+uint8_t Radio_SysID   = 0;             // current system: OGN/ADS-L/LDR
 
 uint8_t RX_OGN_Packets=0;
 
@@ -38,29 +38,29 @@ bool Radio_RxRunning(void) { return Radio.GetStatus()==RF_RX_RUNNING; }
 
 static void Radio_TxDone(void)  // when transmission completed
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
-  Radio_TxConfig(RF_SysID);
-  Radio_RxConfig(RF_SysID);               // refresh the receiver configuration
-  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
+  Radio_TxConfig(Radio_SysID);
+  Radio_RxConfig(Radio_SysID);               // refresh the receiver configuration
+  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
 static void Radio_TxTimeout(void) // never happens, not clear under which conditions.
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
-  Radio_TxConfig(RF_SysID);
-  Radio_RxConfig(RF_SysID);
-  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
+  Radio_TxConfig(Radio_SysID);
+  Radio_RxConfig(Radio_SysID);
+  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
 static void Radio_RxTimeout(void)                     // end-of-receive-period: not used for now
 { }
 
-static bool Radio_CAD = 0;
+static bool Radio_CAD = 0;                            // LoRa Carrier-Detect outcome
 
 static void Radio_CadDone(bool CAD)                   // when carrier sense completes
 { Radio_CAD=CAD; }
 
 // a new packet has been received callback - this should probably be a quick call
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
-{ // Serial.printf("Radio_RxDone(, %d, , ) SysID:%X Chan:%d\n", Size, RF_SysID, RF_Channel);
+{ // Serial.printf("Radio_RxDone(, %d, , ) SysID:%X Chan:%d\n", Size, Radio_SysID, Radio_Channel);
   uint32_t msTime=millis();
   RX_OGN_Packets++;
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
@@ -70,8 +70,8 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   RxPkt->RSSI = -2*RSSI;                                               // [-0.5dBm]
   RxPkt->Time = GPS_PPS_UTC;                                           // [sec]
   RxPkt->msTime = msTime-GPS_PPS_ms;                                   // [ms] time since PPS
-  RxPkt->Channel = RF_Channel;                                         // [ ] channel
-  RxPkt->SysID = RF_SysID;
+  RxPkt->Channel = Radio_Channel;                                         // [ ] channel
+  RxPkt->SysID = Radio_SysID;
   RxPkt->Manchester = RxPkt->SysID!=Radio_SysID_LDR;                   // LDR is not Manchester encoded
   // Serial.printf("%02d.%4d: Radio_RxDone(, %d, , ) RSSI:%2d, SysID:%X Chan:%d\n",
   //         RxPkt->Time%60, RxPkt->msTime, Size, RxPkt->RSSI/2, RxPkt->SysID, RxPkt->Channel);
@@ -110,46 +110,41 @@ static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, Radio
 void Radio_TxConfig(uint8_t SysID)
 { const uint8_t *SYNC;
   uint8_t PktLen;
+  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
   Radio.Standby();
-  if(SysID==Radio_SysID_LDR) Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
-                        else Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
+  if(SysID==Radio_SysID_LDR)
+  { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
+    BT=MOD_SHAPING_G_BT_1; }
+  else
+  { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20); }
   // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
   // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
-  Radio_UpdateConfig(SYNC, SyncLen); }
+  Radio_UpdateConfig(SYNC, SyncLen, BT); }
 
 void Radio_RxConfig(uint8_t SysID)
 { const uint8_t *SYNC;
   uint8_t PktLen;
+  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
-  if(SysID==Radio_SysID_LDR) Radio.SetRxConfig(MODEM_FSK,  50000,  38400, 0,  50000, 4, 100, 1, PktLen  , 0, 0, 0, 0, true);
-                        else Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 250000, 0, 100, 1, PktLen*2, 0, 0, 0, 0, true);
+  if(SysID==Radio_SysID_LDR)
+  { Radio.SetRxConfig(MODEM_FSK,  50000,  38400, 0,  50000, 4, 100, 1, PktLen  , 0, 0, 0, 0, true);
+    BT=MOD_SHAPING_G_BT_1; }
+  else
+  { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 250000, 0, 100, 1, PktLen*2, 0, 0, 0, 0, true); }
   // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadL>
   // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
-  if(SyncLen>2) Radio_UpdateConfig(SYNC+1, SyncLen-1);
-          else  Radio_UpdateConfig(SYNC, SyncLen); }
+  if(SyncLen>2) Radio_UpdateConfig(SYNC+1, SyncLen-1, BT);
+          else  Radio_UpdateConfig(SYNC  , SyncLen  , BT); }
 
 
 #ifdef OBSOLETE
-
-#ifdef WITH_ADSL
-static void ADSL_TxConfig(void)  // RF chip config for ADS-L transmissions: identical to OGN, just different SYNC
-{ Radio.Standby();
-  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower, 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20);
-  Radio_UpdateConfig(ADSL_SYNC, 8); }
-#endif
 
 #ifdef WITH_PAW
 static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-12.5kHz, 38400bps, long preamble
 { Radio.Standby();
   Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
   Radio_UpdateConfig(PAW_SYNC, 8, MOD_SHAPING_G_BT_05); }
-#endif
-
-#ifdef WITH_ADSL
-static void ADSL_RxConfig(void)
-{ Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 200000, 1, 100, 1, 48, 0, 0, 0, 0, true); // same as OGN just different packet size
-  Radio_UpdateConfig(ADSL_SYNC+1, 7); }                                                       // and different SYNC
 #endif
 
 #ifdef WITH_PAW
@@ -230,13 +225,13 @@ static int ManchTransmit(const uint8_t *Data, uint8_t PktLen=26, const uint8_t *
   return TxLen; }
 
 // transmit OGN packet with possible signature
-int OGN_Transmit(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign, uint8_t SignLen)
+int OGN_ManchTx(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign, uint8_t SignLen)
 { Radio_TxConfig(Radio_SysID_OGN);
   return ManchTransmit(TxPacket.Byte(), TxPacket.Bytes, Sign, SignLen); }
 
 #ifdef WITH_ADSL
 // transmit ADS-L packet with possible signature
-int ADSL_Transmit(const ADSL_Packet &TxPacket, uint8_t *Sign, uint8_t SignLen)
+int ADSL_ManchTx(const ADSL_Packet &TxPacket, uint8_t *Sign, uint8_t SignLen)
 { Radio_TxConfig(Radio_SysID_ADSL);
   return ManchTransmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
 
@@ -263,7 +258,7 @@ void Radio_Init(void)
   Radio.Init(&Radio_Events);
 
   Radio.SetChannel(Radio_FreqPlan.getFrequency(0));  // set on default frequency
-  RF_SysID = Radio_SysID_OGN_ADSL; // Radio_SysID_OGN;
+  Radio_SysID = Radio_SysID_OGN_ADSL; // Radio_SysID_OGN;
   Radio_TxConfig(Radio_SysID_OGN);
   Radio_RxConfig(Radio_SysID_OGN);
   Radio.RxBoosted(0);

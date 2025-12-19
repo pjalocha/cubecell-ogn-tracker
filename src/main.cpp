@@ -1505,13 +1505,13 @@ static void StartRFslot(void)                                     // start the T
   for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
   { if(!Radio_TxRunning()) break;
     delay(1); }
-  RF_Slot=0;
-  RF_SysID=Radio_SysID_OGN_ADSL;      // receive OGN and ADS-L in parallel
-  RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-  Radio_TxConfig(RF_SysID);
-  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
-  Radio_RxConfig(RF_SysID);
-  // Serial.printf("StartRFslot() Sys:%d Chan:%d Wait:%d\n", RF_SysID, RF_Channel, Wait);
+  Radio_Slot=0;
+  Radio_SysID=Radio_SysID_OGN_ADSL;      // receive OGN and ADS-L in parallel
+  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
+  Radio_TxConfig(Radio_SysID);
+  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
+  Radio_RxConfig(Radio_SysID);
+  // Serial.printf("StartRFslot() Sys:%d Chan:%d Wait:%d\n", Radio_SysID, Radio_Channel, Wait);
   Radio.RxBoosted(0);
   XorShift64(Random.Word);
   TxTime0 = Random.RX  % 389;                                 // transmit times within slots
@@ -1622,16 +1622,16 @@ void loop()
   }
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
-  if(RF_Slot==0)                                                  // while in the 1st sub-slot
+  if(Radio_Slot==0)                                                  // while in the 1st sub-slot
   { if(TxPkt0 && SysTime >= TxTime0 && !Radio_TxRunning())        //
     { int TxLen=0;
 // #ifdef WITH_DIG_SIGN
-//       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_Transmit(*TxPkt0, SignKey.Signature);
-//                                             else TxLen=OGN_Transmit(*TxPkt0);
+//       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_ManchTx(*TxPkt0, SignKey.Signature);
+//                                             else TxLen=OGN_ManchTx(*TxPkt0);
 // #else
 #ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-      { TxLen=ADSL_Transmit(ADSL_TxPacket); }
+      { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
       else
 #endif
       {
@@ -1644,18 +1644,18 @@ void loop()
           PAW_Freq=0; }
         else
 #endif
-        { TxLen=OGN_Transmit(*TxPkt0); }
+        { TxLen=OGN_ManchTx(*TxPkt0); }
       }
 // #endif
       // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
       //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
       TxPkt0=0; }
     else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
-    { RF_Slot=1;
-      Radio_TxConfig(RF_SysID);
-      Radio_RxConfig(RF_SysID);
-      RF_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, RF_Slot, 1);
-      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(RF_Channel));
+    { Radio_Slot=1;
+      Radio_TxConfig(Radio_SysID);
+      Radio_RxConfig(Radio_SysID);
+      Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
+      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
       Radio.RxBoosted(0);
       // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
@@ -1663,12 +1663,12 @@ void loop()
   { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())
     { int TxLen=0;
 // #ifdef WITH_DIG_SIGN
-//       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_Transmit(*TxPkt1, SignKey.Signature);
-//                                             else TxLen=OGN_Transmit(*TxPkt1);
+//       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_ManchTx(*TxPkt1, SignKey.Signature);
+//                                             else TxLen=OGN_ManchTx(*TxPkt1);
 // #else
 #ifdef WITH_ADSL
       if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-      { TxLen=ADSL_Transmit(ADSL_TxPacket); }
+      { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
       else
 #endif
       {
@@ -1683,7 +1683,7 @@ void loop()
         else
 #endif
 */
-        { TxLen=OGN_Transmit(*TxPkt1); }
+        { TxLen=OGN_ManchTx(*TxPkt1); }
       }
 // #endif
       // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
