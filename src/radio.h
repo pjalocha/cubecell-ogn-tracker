@@ -19,6 +19,9 @@ extern LowPass2<int32_t, 4,2,4> RX_RSSI;
 extern    bool Radio_Slot;
 extern uint8_t Radio_Channel;
 extern uint8_t Radio_SysID;
+
+extern bool    Radio_CAD;
+
 extern uint8_t RX_OGN_Packets;
 
 bool Radio_isIdle   (void);

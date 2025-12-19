@@ -1274,6 +1274,9 @@ void setup()
 
   Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
 
+#ifdef WITH_BMX280
+  BMX280_Init();
+#endif
 #ifdef WITH_BME280
   BME280_Init();
 #endif
@@ -1379,7 +1382,8 @@ static void StartRFslot(void)                                     // start the T
   BMP280_Read(GPS);
 #endif
   if(GPS.hasBaro)
-  { uint8_t Len=GPS.WritePGRMZ(Line);
+  { uint8_t Len=0;
+    Len+=GPS.WritePGRMZ(Line+Len);
     Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
     Serial.write((const uint8_t *)Line, Len); }
   bool TxPos=0;
@@ -1410,9 +1414,7 @@ static void StartRFslot(void)                                     // start the T
     if(MSH_Freq)
     { MSH_TxConfig();
       Radio.SetChannel(MSH_Freq);
-      // uint32_t TxTime=micros();
-      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // tis call takes about 3ms but it only triggers the transmission
-      // TxTime=micros()-TxTime; Serial.printf("MSHtx:%uus\n", TxTime);
+      Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // this call takes about 3ms but it only triggers the transmission
       MSH_BackOff = 50 + Random.RX%21;
       MSH_Freq=0; }
 #endif
@@ -1424,10 +1426,12 @@ static void StartRFslot(void)                                     // start the T
     if(FNT_Freq)
     { FNT_TxConfig();
       Radio.SetChannel(FNT_Freq);
-      // uint32_t TxTime=micros();
-      Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
-      // TxTime=micros()-TxTime; Serial.printf("FNTtx:%uus\n", TxTime);
-      FNT_BackOff = 9 + Random.RX%3;
+      // Radio.SetCadParams(LORA_CAD_02_SYMBOL, 5+13, 10, LORA_CAD_ONLY, 0);
+      Radio.StartCad(2);
+      while(Radio.GetStatus()==RF_CAD) { CONS_Proc(); }
+      if(!Radio_CAD)
+      { Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
+        FNT_BackOff = 9 + Random.RX%3; }
       FNT_Freq=0; }
 /*
     if(FNT_Freq)

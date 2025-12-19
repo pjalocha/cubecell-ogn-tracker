@@ -53,7 +53,7 @@ static void Radio_TxTimeout(void) // never happens, not clear under which condit
 static void Radio_RxTimeout(void)                     // end-of-receive-period: not used for now
 { }
 
-static bool Radio_CAD = 0;                            // LoRa Carrier-Detect outcome
+bool Radio_CAD = 0;                                   // LoRa Carrier-Detect outcome
 
 static void Radio_CadDone(bool CAD)                   // when carrier sense completes
 { Radio_CAD=CAD; }
