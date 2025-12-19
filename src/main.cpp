@@ -1,8 +1,9 @@
 // OGN-Tracker for the CubeCell HELTEC modul with GPS and small OLED.
 
-// the following options do not work correctly yet in this code
-// #define WITH_ADSL  // needs -O2 compiler flag, otherwise XXTEA gets stuck, not understood why
+// #define WITH_ADSL  // now works correctly
 // #define WITH_FANET // only up to 8000m altitude
+
+// the following options do not work correctly yet in this code
 // #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
@@ -12,7 +13,7 @@
 // #define WITH_GPS_CONS // send the GPS NMEA to the console
 
 #include "Arduino.h"
-#undef min
+#undef min                    // those are defined in Arduino and cause conflict with #include <slgorithm>
 #undef max
 
 #include <Wire.h>
@@ -30,6 +31,10 @@
 
 #include "HT_SSD1306Wire.h"
 #include "CubeCell_NeoPixel.h"
+
+#ifdef WITH_BMX280
+#include "bme280.h"
+#endif
 
 #ifdef WITH_BME280
 #include <Adafruit_Sensor.h>
@@ -111,23 +116,6 @@ static int RNG(uint8_t *Data, unsigned Size)  // produce random bytes
 
 uint64_t getUniqueID(void) { return getID(); }        // get unique serial ID of the CPU/chip
 uint32_t getUniqueAddress(void) { return getID()&0x00FFFFFF; }
-/*
-#define HARDWARE_ID 0x03
-#define SOFTWARE_ID 0x01
-
-#define HARD_NAME "OGN-CC"
-// #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "v0.1.7"
-*/
-/*
-#define DEFAULT_AcftType        1         // [0..15] default aircraft-type: glider
-#define DEFAULT_GeoidSepar     40         // [m]
-#define DEFAULT_CONbaud    115200         // [bps]
-#define DEFAULT_PPSdelay       50         // [ms]
-#define DEFAULT_FreqPlan        0
-
-#include "parameters.h"
-*/
 
 FlashParameters Parameters;       // parameters stored in Flash: address, aircraft type, etc.
 
@@ -137,7 +125,7 @@ static void Button_ForceActive(void);
 
 // ===============================================================================================
 
-static uint16_t BattVoltage = 0;         // [mV] battery voltage, measured every second
+static uint16_t BattVoltage  = 0;        // [mV] battery voltage, measured every second
 static uint8_t  BattCapacity = 0;        // [ %]
 
 static uint8_t calcBattCapacity(uint16_t mVolt)
@@ -173,8 +161,54 @@ static Air530ZClass GPS;                      // GPS
 
 // GPS.end() simply pulls the power control pin GPIO14 to HIGH/inactive state so the GPS shuts down.
 // There is as well the mode-pin of the GPS GPIO1 but it is not clear what it actually does
+
 // ===============================================================================================
 
+uint8_t I2C_Read (uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+{ Wire.beginTransmission(Addr);
+  int Ret=Wire.write(Reg);
+  Wire.endTransmission(false);
+  Ret=Wire.requestFrom(Addr, Len);
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { Data[Idx]=Wire.read(); }
+  return Ret!=Len; }
+
+uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+{ Wire.beginTransmission(Addr);
+  int Ret=Wire.write(Reg);
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { Ret=Wire.write(Data[Idx]); if(Ret!=1) break; }
+  Wire.endTransmission();
+  return Ret!=1; }
+
+#ifdef WITH_BMX280
+static BME280   Baro;
+
+static void BMX280_Init(void)
+{ Baro.Bus=0;
+  uint8_t Err=Baro.CheckID();
+  if(Err==0) Err=Baro.ReadCalib();
+  if(Err==0) Err=Baro.Acquire();
+  if(Err==0) Baro.Calculate(); }
+
+static void BMX280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
+{ if(Baro.ADDR==0) return;
+  uint8_t Err=Baro.Acquire();
+  if(Err!=0) return;
+  Baro.Calculate();
+  GPS.Temperature = Baro.Temperature;            // [0.1degC]
+  GPS.Pressure = Baro.Pressure;                  // [0.25Pa]
+  GPS.StdAltitude = floorf(BaroAlt(0.25f*GPS.Pressure)*10+0.5);
+  // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
+  GPS.hasBaro=1;
+  if(!Baro.hasHumidity()) return;
+  GPS.Humidity=Baro.Humidity;
+  GPS.hasHum=1; }
+
+#endif
+
+// ===============================================================================================
+// BME/BMP280 with Arduino library
 
 #ifdef WITH_BME280                               // this works strictly for BME280, although could possibly be backward compatible to BMP280
 static Adafruit_BME280 BME280;                   // pressure/temperature/humidity sensor
@@ -1208,9 +1242,6 @@ void setup()
 #endif
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
-  // Serial.setRxBufferSize(120);            // this call has possibly no effect and buffer size is always 255 bytes
-  // Serial.setTxBufferSize(512);            // this call does not even exist and buffer size is not known
-  // while (!Serial) { }                  // wait for USB serial port to connect
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
@@ -1255,13 +1286,13 @@ void setup()
   // attachInterrupt(GPIO12, GPS_HardPPS, RISING);      //
 
   char GPS_Cmd[64];
-  uint8_t Len = Format_String(GPS_Cmd, "$PCAS03,1,0,1,1,1,0,0,0");
+  uint8_t Len = Format_String(GPS_Cmd, "$PCAS03,1,0,1,1,1,0,0,0");  // send command to enable/disable particular NMEA
   // $PCAS03,nGGA,nGLL,nGSA,nGSV,nRMC,nVTG,nZDA,nTXT // rate to send each NMEA type
   Len += NMEA_AppendCheckCRNL(GPS_Cmd, Len);
   GPS_Cmd[Len]=0;
   Serial1.write(GPS_Cmd);
 
-  Len = Format_String(GPS_Cmd, "$PCAS04,7");
+  Len = Format_String(GPS_Cmd, "$PCAS04,7");  // send command to enable all GNSS systems
   // $PCAS04,Mode      // 1=GPS, 2=BDS, 3=GPS+BDS, 4=GLONASS, 5=GPS+GLONASS, 6=BDS+GLONASS, 7=GPS+BDS+GLONASS
   Len += NMEA_AppendCheckCRNL(GPS_Cmd, Len);
   GPS_Cmd[Len]=0;
@@ -1280,14 +1311,7 @@ void setup()
   SignKey.PrintKeys();
 #endif
 
-  // Radio.SetChannel(Radio_FreqPlan.getFrequency(0));
-  // OGN_TxConfig();
-  // OGN_RxConfig();
-  // Radio.RxBoosted(0);
-
-  // RX_RSSI.Set(-2*110);
-
-  PrintPOGNS();
+  PrintPOGNS();               // send to the console (some) current parameters
 }
 
 __attribute__((aligned(4)))
@@ -1354,10 +1378,10 @@ static void StartRFslot(void)                                     // start the T
 #ifdef WITH_BMP280
   BMP280_Read(GPS);
 #endif
-  // if(GPS.hasBaro)
-  // { uint8_t Len=GPS.WritePGRMZ(Line);
-  //   Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
-  //   Serial.write((const uint8_t *)Line, Len); }
+  if(GPS.hasBaro)
+  { uint8_t Len=GPS.WritePGRMZ(Line);
+    Len+=GPS.WriteLK8EX1(Line+Len, BattVoltage);
+    Serial.write((const uint8_t *)Line, Len); }
   bool TxPos=0;
 #ifdef WITH_FANET
   FNT_Freq=0;
