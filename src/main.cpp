@@ -1011,7 +1011,8 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
     Pos=0; }
   if(!OK || Len==0) return 0;
   if(Pos)
-  { if(Mesht_GPS.TimeDistLimit(Mesht_RefGPS)) return 0;
+  { bool Send=Mesht_GPS.TimeDistLimit(Mesht_RefGPS);
+    if(!Send) return 0;
     Mesht_RefGPS=Mesht_GPS; }
   Packet->Len=Packet->HeaderSize+Len;
   Packet->Header.PktID ^= MeshtHash(Packet->Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
