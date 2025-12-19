@@ -20,7 +20,7 @@ extern    bool Radio_Slot;
 extern uint8_t Radio_Channel;
 extern uint8_t Radio_SysID;
 
-extern bool    Radio_CAD;
+extern  int8_t Radio_CAD;
 
 extern uint8_t RX_OGN_Packets;
 

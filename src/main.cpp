@@ -1414,11 +1414,15 @@ static void StartRFslot(void)                                     // start the T
     if(MSH_Freq)
     { MSH_TxConfig();
       Radio.SetChannel(MSH_Freq);
-      Radio_CAD=0;
-      Radio.StartCad(2);
-      for( uint8_t Wait=10; Wait>0; Wait--)
-      { if(Radio.GetStatus()!=RF_CAD) break;
+      Radio_CAD=(-1);
+      Radio.StartCad(4);
+      uint8_t Wait=0;
+      for( ; Wait<10; Wait++)
+      { delay(1);
+        // if(Radio.GetStatus()!=RF_CAD) break;
+        if(Radio_CAD>=0) break;
         CONS_Proc(); }
+      // Serial.printf("MSHcad:%d %dms\n", Radio_CAD, Wait+1);
       if(!Radio_CAD)
       { Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // this call takes about 3ms but it only triggers the transmission
         MSH_BackOff = 50 + Random.RX%21; }
@@ -1432,38 +1436,19 @@ static void StartRFslot(void)                                     // start the T
     if(FNT_Freq)
     { FNT_TxConfig();
       Radio.SetChannel(FNT_Freq);
-      Radio_CAD=0;
-      Radio.StartCad(2);
-      for( uint8_t Wait=10; Wait>0; Wait--)
-      { if(Radio.GetStatus()!=RF_CAD) break;
+      Radio_CAD=(-1);
+      Radio.StartCad(4);
+      uint8_t Wait=0;
+      for( ; Wait<10; Wait++)
+      { delay(1);
+        // if(Radio.GetStatus()!=RF_CAD) break;
+        if(Radio_CAD>=0) break;
         CONS_Proc(); }
+      // Serial.printf("FNTcad:%d %dms\n", Radio_CAD, Wait+1);
       if(!Radio_CAD)
       { Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
         FNT_BackOff = 9 + Random.RX%3; }
       FNT_Freq=0; }
-/*
-    if(FNT_Freq)
-    { // Serial.println("FNT:Tx");
-      // Random.RX  ^= Radio.Random();
-      // Random.GPS ^= Radio.Random();
-      // XorShift64(Random.Word);
-      Radio.Standby();
-      FNT_RxConfig();
-      Radio.SetChannel(FNT_Freq);
-      Radio.StartCad(4);
-      while(Radio.GetStatus()==RF_CAD) { CONS_Proc(); }
-      // delay(1);
-      // Serial.printf("CAD:%d\n", Radio_CAD);
-      if(Radio_CAD) { Radio.Standby(); FNT_Freq=0; }
-      else
-      { FNT_TxConfig();
-        Radio.SetChannel(FNT_Freq);
-        // FNT_Seq++;
-        Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
-        // Serial.println("FNT:Tx");
-        FNT_BackOff = 9 + Random.RX%3; }
-    }
-*/
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
 #ifdef WITH_PAW
