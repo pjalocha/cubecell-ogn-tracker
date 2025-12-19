@@ -806,7 +806,12 @@ static void OLED_RF(void)                 // display RF-related data
 const  int OLED_Pages    = 5;
 static int OLED_CurrPage = 0;
 
+#ifdef WITH_TRACKING
 static uint8_t  OLED_Mode=0;            // 0=pages, 1=tracking a target
+#else
+static const uint8_t  OLED_Mode=0;
+#endif
+
 static uint8_t  OLED_CurrTgtIdx = 0;    // index of the current target in the relay queue
 static uint32_t OLED_CurrTarget = 0;    // target aircraft being tracked
 
@@ -1187,11 +1192,13 @@ static void Button_Process(void)                    // process the button push/r
                else OLED_NextPage(); }
     Button_IdleTime=0;
     Button_ShortPush--; }
+#ifdef WITH_TRACKING
   while(Button_LongPush)
   { OLED_Mode = !OLED_Mode;
     if(!OLED_isON) OLED_ON();
     Button_IdleTime=0;
     Button_LongPush--; }
+#endif
   Button_PrevSysTime=SysTime; }
 
 static void Button_ForceActive(void)

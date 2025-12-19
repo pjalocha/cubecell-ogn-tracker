@@ -120,6 +120,8 @@ class MeshtProto_GPS
    bool TimeDistLimit(const MeshtProto_GPS &RefGPS, uint32_t MinDist=150, uint32_t MinPeriod=300) const
    { uint32_t TimeDiff=RefGPS.Time-Time; if(Time>=MinPeriod) return 1;
      if(getDist(RefGPS)>=MinDist) return 1;
+     if(RefGPS.hasAltMSL && hasAltMSL)
+     { int32_t AltDist=RefGPS.AltMSL-AltMSL; if(abs(AltDist)>=MinDist/2) return 1; }
      return 0; }
 
 #ifdef OBSOLETE
