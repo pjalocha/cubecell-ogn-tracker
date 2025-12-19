@@ -955,6 +955,7 @@ __attribute__((aligned(4)))
 static MeshtProto_NodeInfo Mesht_NodeInfo;
 __attribute__((aligned(4)))
 static MeshtProto_GPS Mesht_GPS;
+static MeshtProto_GPS Mesht_RefGPS;
 __attribute__((aligned(4)))
 static AES128 AES;
 
@@ -993,14 +994,19 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
   if(!OK) return 0;
   static uint8_t InfoBackOff=0;
   int Len=0;
-  OK=getMeshtGPS(Position);
+  OK=getMeshtGPS(Position);                                              // get the GPS position or at least the time
   if(OK) Len=MeshtProto::EncodeGPS(Packet->getMeshtMsg(), Mesht_GPS);
+  bool Pos=OK;
   if(InfoBackOff) InfoBackOff--;
-  if(!OK || InfoBackOff==0)
+  if(!OK || InfoBackOff==0)                                              // decide to send NodeInfo instead of position
   { OK=getMeshNodeInfo();
     if(OK) Len=MeshtProto::EncodeNodeInfo(Packet->getMeshtMsg(), Mesht_NodeInfo);
-    InfoBackOff = 10+Random.RX%5; }
+    InfoBackOff = 7+Random.RX%5;
+    Pos=0; }
   if(!OK || Len==0) return 0;
+  if(Pos)
+  { if(Mesht_GPS.TimeDistLimit(Mesht_RefGPS)) return 0;
+    Mesht_RefGPS=Mesht_GPS; }
   Packet->Len=Packet->HeaderSize+Len;
   Packet->Header.PktID ^= MeshtHash(Packet->Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
   OK=Packet->encryptMeshtMsg(AES);
@@ -1425,7 +1431,7 @@ static void StartRFslot(void)                                     // start the T
       // Serial.printf("MSHcad:%d %dms\n", Radio_CAD, Wait+1);
       if(!Radio_CAD)
       { Radio.Send(MSH_TxPacket.Byte, MSH_TxPacket.Len);  // this call takes about 3ms but it only triggers the transmission
-        MSH_BackOff = 50 + Random.RX%21; }
+        MSH_BackOff = 20 + Random.RX%21; }
       MSH_Freq=0; }
 #endif
 #ifdef WITH_FANET

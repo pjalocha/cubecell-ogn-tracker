@@ -52,8 +52,8 @@ class MeshtProto_GPS
    int32_t  Lon;
    int32_t  AltHAE;
    int32_t  AltMSL;
-   uint16_t Speed;
-   uint16_t Track;
+  uint16_t  Speed;
+  uint16_t  Track;
     int8_t  GeoidSepar;
    uint8_t  Prec_bits;
    uint8_t  Prec_meters;
@@ -98,6 +98,29 @@ class MeshtProto_GPS
      const float DistPerBit = 40e6/360/1e7;          // [m]
      uint64_t MultFactor=1; MultFactor<<=(32-Prec_bits);
      return roundf(DistPerBit*MultFactor); }
+
+   static int32_t getLatDist(int32_t Lat, int32_t RefLat) { return (Lat-RefLat)/90; } // [m] distance along the Latitude
+   int32_t getLatDist(int32_t RefLat) const { return getLatDist(Lat, RefLat); }
+
+   static int32_t getLonDist(int32_t Lon, int32_t RefLon, int16_t LatCos)
+   { return ( (int32_t)LatCos * ((Lon-RefLon)/90) +0x800)>>12; }
+   int32_t getLonDist(int32_t RefLon, int16_t LatCos) const
+   { return getLonDist(Lon, RefLon, LatCos); }
+
+   uint32_t getDist(int32_t RefLat, int32_t RefLon) const
+   { int32_t LatDist=getLatDist(RefLat);
+     int32_t LonDist=getLonDist(Lat, RefLat, getLatCos(Lat));
+     return IntDistance(LatDist, LonDist); }
+
+   static int16_t getLatCos(int32_t Lat)   // set the Latitude cosine for distance calculations and movement predictions
+   { uint16_t NormLat = (Lat/54931) + 0x4000; return Isin(NormLat); }
+
+   uint32_t getDist(const MeshtProto_GPS &RefGPS) const { return getDist(RefGPS.Lat, RefGPS.Lon); }
+
+   bool TimeDistLimit(const MeshtProto_GPS &RefGPS, uint32_t MinDist=150, uint32_t MinPeriod=300) const
+   { uint32_t TimeDiff=RefGPS.Time-Time; if(Time>=MinPeriod) return 1;
+     if(getDist(RefGPS)>=MinDist) return 1;
+     return 0; }
 
 #ifdef OBSOLETE
    int WriteAPRS(char *Line, const char *Icon, bool HighRes=1) const
@@ -146,11 +169,6 @@ class MeshtProto_GPS
      }
 
      Line[Len]=0; return Len; }
-
-   uint32_t getDist(int32_t RefLat, int32_t RefLon)
-   { int32_t LatDist=Acft_TimePos::LatDist(Lat, RefLat);
-     int32_t LonDist=Acft_TimePos::LonDist(Lat, RefLat, Acft_TimePos::getLatCos(Lat));
-     return IntDistance(LatDist, LonDist); }
 
 #endif // of OBSOLETE
 } ;
