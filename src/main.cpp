@@ -955,6 +955,7 @@ __attribute__((aligned(4)))
 static MeshtProto_NodeInfo Mesht_NodeInfo;
 __attribute__((aligned(4)))
 static MeshtProto_GPS Mesht_GPS;
+__attribute__((aligned(4)))
 static MeshtProto_GPS Mesht_RefGPS;
 __attribute__((aligned(4)))
 static AES128 AES;
