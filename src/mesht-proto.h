@@ -32,7 +32,7 @@ class MeshtProto_NodeInfo
      if(Role<13) return Table[Role];
      return "-?-"; }
 
-} ;
+} __attribute__((packed)) ;
 
 class MeshtProto_TelemDev
 { public:
@@ -42,7 +42,7 @@ class MeshtProto_TelemDev
 
   public:
 
-} ;
+} __attribute__((packed)) ;
 
 class MeshtProto_GPS
 { public:
@@ -72,7 +72,7 @@ class MeshtProto_GPS
        bool hasTrack     : 1;
        bool hasSensorID  : 1;
        uint8_t Sats      : 5;
-     } ;
+     } __attribute__((packed)) ;
    } ;
 
   public:
@@ -173,7 +173,7 @@ class MeshtProto_GPS
      Line[Len]=0; return Len; }
 
 #endif // of OBSOLETE
-} ;
+} __attribute__((packed)) ;
 
 
 // Protobuf decoding (meant for Meshtantic)
