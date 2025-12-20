@@ -4,7 +4,6 @@
 // #define WITH_FANET // only up to 8000m altitude
 
 // the following options do not work correctly yet in this code
-// #define WITH_PAW   // only up to 4000m alttude
 
 // use either WITH_BMP280 or WITH_BME280 but not both at the same time
 // #define WITH_BME280 // read a BME280 pressure/temperature/humidity sensor attached to the I2C (same as the OLED)
@@ -61,9 +60,6 @@
 
 #ifdef WITH_ADSL
 #include "adsl.h"
-#endif
-#ifdef WITH_PAW
-#include "paw.h"
 #endif
 #ifdef WITH_FANET
 #include "fanet.h"
@@ -436,8 +432,8 @@ static int GPS_Process(void)                           // process serial data st
     uint8_t Byte=GPS.read();                           // read character
     GpsNMEA.ProcessByte(Byte);                         // NMEA interpreter
     if(GpsNMEA.isComplete())                           // if NMEA is done
-    { GPS_SatMon.Process(GpsNMEA);                    // process satellite data
-      GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);           // interpret the position NMEA by the GPS
+    { GPS_SatMon.Process(GpsNMEA);                     // process satellite data
+      GPS_Pipe[GPS_Ptr].ReadNMEA(GpsNMEA);             // interpret the position NMEA by the GPS
 #ifndef WITH_GPS_NMEA_PASS
       if(GpsNMEA.isGxRMC() || GpsNMEA.isGxGGA() /* || GpsNMEA.isGxGSA() */ )          // selected GPS NMEA sentences
 #endif
@@ -1362,17 +1358,16 @@ static uint32_t MSH_Freq = 0;                // [Hz] if zero then transmission n
 static  uint8_t MSH_BackOff=0;               // [sec]
 #endif
 
-#ifdef WITH_PAW
-static PAW_Packet PAW_TxPacket;              // PAW packet to transmit
-static uint32_t PAW_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
-static  uint8_t PAW_BackOff=0;               // [sec]
-#endif
+static int32_t  RxRssiSum=0;                 // sum RSSI readouts
+static int      RxRssiCount=0;               // count RSSI readouts
 
-static int32_t  RxRssiSum=0;                // sum RSSI readouts
-static int      RxRssiCount=0;              // count RSSI readouts
+static int16_t  TxRssiThres=0;               // [dBm] thresdhold for LBT
 
-static void StartRFslot(void)                                     // start the TX/RX time slot right after the GPS stops sending data
-{ if(RxRssiCount) { RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
+static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
+{ if(RxRssiCount)
+  { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 10dB for the threshold
+    // Serial.printf("RxRssi: Thres:%d %d/%d\n", TxRssiThres, RxRssiSum, RxRssiCount);
+    RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
 
   // Serial.printf("StartRFslot()\n");
   XorShift64(Random.Word);
@@ -1404,9 +1399,6 @@ static void StartRFslot(void)                                     // start the T
   bool TxPos=0;
 #ifdef WITH_FANET
   FNT_Freq=0;
-#endif
-#ifdef WITH_PAW
-  PAW_Freq=0;
 #endif
   if(GPS_State.FixValid)                                      // if position is valid
   { GPS_ValidUTC  = GPS.getUnixTime();
@@ -1466,12 +1458,6 @@ static void StartRFslot(void)                                     // start the T
       FNT_Freq=0; }
 #endif
     getPosPacket(TxPosPacket.Packet, GPS);                    // produce position packet to be transmitted
-#ifdef WITH_PAW
-    if(PAW_TxPacket.Copy(TxPosPacket.Packet))                 // convert OGN to PAW
-    { if(PAW_BackOff) PAW_BackOff--;
-      else if(Radio_FreqPlan.Plan<=1) PAW_Freq=Radio_FreqPlan.getFreqPAW(GPS_PPS_UTC);
-    }
-#endif
 #ifdef WITH_DIG_SIGN
     if(SignKey.KeysReady)
     { SignKey.Hash(GPS_PPS_UTC, TxPosPacket.Packet.Byte(), TxPosPacket.Packet.Bytes); // produce SHA256 hash (takes below 1ms)
@@ -1504,14 +1490,6 @@ static void StartRFslot(void)                                     // start the T
     // Serial.println("FNT:EoT");
     Radio.Standby(); }
 #endif
-#ifdef WITH_PAW
-  if(PAW_Freq)
-  { PAW_TxConfig();
-    Radio.SetChannel(PAW_Freq);
-    PAW_Transmit(PAW_TxPacket);
-    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); }
-    PAW_BackOff = 3 + Random.RX%3; }
-#endif
 */
   uint8_t Wait=50;                    // [ms]
   for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
@@ -1526,8 +1504,8 @@ static void StartRFslot(void)                                     // start the T
   // Serial.printf("StartRFslot() Sys:%d Chan:%d Wait:%d\n", Radio_SysID, Radio_Channel, Wait);
   Radio.RxBoosted(0);
   XorShift64(Random.Word);
-  TxTime0 = Random.RX  % 389;                                 // transmit times within slots
-  TxTime1 = Random.GPS % 299;
+  TxTime0 = Random.RX  % 189;                                 // transmit times within slots
+  TxTime1 = Random.GPS % 199;
   TxPkt0=TxPkt1=0;
   if(TxPos) TxPkt0 = TxPkt1 = &TxPosPacket;
   XorShift64(Random.Word);
@@ -1635,33 +1613,22 @@ void loop()
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
   if(Radio_Slot==0)                                                  // while in the 1st sub-slot
-  { if(TxPkt0 && SysTime >= TxTime0 && !Radio_TxRunning())        //
-    { int TxLen=0;
-// #ifdef WITH_DIG_SIGN
-//       if(SignKey.SignReady && SignTxPkt==TxPkt0) TxLen=OGN_ManchTx(*TxPkt0, SignKey.Signature);
-//                                             else TxLen=OGN_ManchTx(*TxPkt0);
-// #else
+  { if(TxPkt0 && SysTime>=TxTime0 && !Radio_TxRunning())        //
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK);
+      if(RxRssi>=TxRssiThres)
+      { int TxLen=0;
 #ifdef WITH_ADSL
-      if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-      { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
-      else
-#endif
-      {
-#ifdef WITH_PAW
-        if(PAW_Freq)
-        { PAW_TxConfig();
-          Radio.SetChannel(PAW_Freq);
-          PAW_Transmit(PAW_TxPacket);
-          PAW_BackOff = 3 + Random.RX%3;
-          PAW_Freq=0; }
+        if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
         else
 #endif
         { TxLen=OGN_ManchTx(*TxPkt0); }
-      }
-// #endif
-      // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
-      //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
-      TxPkt0=0; }
+        // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
+        //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
+        TxPkt0=0; }
+      else
+      { TxTime0 += 10+Random.RX%47; }
+    }
     else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { Radio_Slot=1;
       Radio_TxConfig(Radio_SysID);
@@ -1673,34 +1640,21 @@ void loop()
     }
   } else                                                          // while in the 2nd sub-slot
   { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())
-    { int TxLen=0;
-// #ifdef WITH_DIG_SIGN
-//       if(SignKey.SignReady && SignTxPkt==TxPkt1) TxLen=OGN_ManchTx(*TxPkt1, SignKey.Signature);
-//                                             else TxLen=OGN_ManchTx(*TxPkt1);
-// #else
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK);
+      if(RxRssi>=TxRssiThres)
+      { int TxLen=0;
 #ifdef WITH_ADSL
-      if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-      { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
-      else
-#endif
-      {
-/*
-#ifdef WITH_FANET
-        if(FNT_Freq)
-        { FNT_TxConfig();
-          Radio.SetChannel(FNT_Freq);
-          Radio.Send(FNT_TxPacket.Byte, FNT_TxPacket.Len);
-          FNT_BackOff = 9 + Random.RX%3;
-          FNT_Freq=0; }
+        if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
         else
 #endif
-*/
         { TxLen=OGN_ManchTx(*TxPkt1); }
-      }
-// #endif
-      // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
-      //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
-      TxPkt1=0; }
+        // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
+        //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
+        TxPkt1=0; }
+      else
+      { TxTime1 += 10+Random.RX%47; }
+    }
   }
 
 }
