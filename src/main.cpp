@@ -1482,15 +1482,6 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   OLED_DispPage(GPS);                                         // display GPS data or other page on the OLED
   CONS_Proc();
   // Serial.printf("StartRFslot() #2\n");
-/*
-#ifdef WITH_FANET
-  if(FNT_Freq)                                                 // if FANET transmission started then wait for it to finish
-  { // Serial.println("FNT:...");
-    while(Radio.GetStatus()==RF_TX_RUNNING) { CONS_Proc(); }
-    // Serial.println("FNT:EoT");
-    Radio.Standby(); }
-#endif
-*/
   uint8_t Wait=50;                    // [ms]
   for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
   { if(!Radio_TxRunning()) break;
@@ -1568,20 +1559,21 @@ static void PPS_Process(void)
 { static bool PrevPPS=0;
   static uint32_t PrevTime=0;
   bool PPS = GPS_ReadPPS();
-  if(PPS!=PrevPPS)
-  { if(PPS)
-    { uint32_t Time=millis();
-      uint32_t DiffTime = Time-PrevTime;
+  if(PPS!=PrevPPS)                                               // if PPS line changed state
+  { if(PPS)                                                      // if positive edge (ignore negative edge)
+    { uint32_t Time=millis();                                    // [ms]
+      uint32_t DiffTime = Time-PrevTime;                         // [ms]
       // Serial.printf("PPS: %4d\n", DiffTime);
-      if(DiffTime>=990 && DiffTime<=1010) PPS_HardEdge(Time);
+      if(DiffTime>=990 && DiffTime<=1010) PPS_HardEdge(Time);    // [ms] must be 1000+/-10ms
       PrevTime=Time; }
     PrevPPS=PPS; }
 }
 
 void loop()
-{ CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
+{ // CY_PM_WFI;                                                      // sleep, while waiting for an interrupt (reduces power consumption ?)
+  delay(1);                                                       //
 
-  PPS_Process();
+  PPS_Process();                                                  // check for PPS edge
   Button_Process();                                               // check for button short/long press
   if(Button_LowPower) { Parameters.PowerON=0; Parameters.WriteToFlash(); Sleep(); return; }
 
