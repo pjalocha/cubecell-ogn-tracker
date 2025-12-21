@@ -505,12 +505,14 @@ static void OLED_Logo(void)                                               // dis
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   Display.drawString( 0,  0, "Mini-OGN");
 
-  Display.setFont(ArialMT_Plain_10);
   Parameters.Print(Line); Line[10]=0;
-  Display.drawString( 0, 16, Line);
+  Display.drawString( 0, 16, Line+2);
+
+  Display.setFont(ArialMT_Plain_10);
 #ifdef SOFT_NAME
-  Display.drawString( 0, 54, SOFT_NAME);
+  Display.drawString( 0, 44, SOFT_NAME);
 #endif
+  Display.drawString( 0, 54, "(c) Pawel Jalocha");
   Display.display(); }
 
 static void OLED_Info(void)                                               // display the information page
