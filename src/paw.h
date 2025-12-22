@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "adsl.h"
 #include "ogn1.h"
 #include "format.h"
 
@@ -54,7 +55,6 @@ class PAW_Packet
    }  __attribute__((packed)) ;
 
   public:
-   void Copy(const uint8_t *Data) { memcpy(Byte, Data, Size); }
    void Clear(void)
    { Byte[0]=0x24;
      for(int Idx=1; Idx<Size; Idx++)
@@ -77,7 +77,28 @@ class PAW_Packet
      Alt = Altitude;
      return 3; }
 
-   int Copy(const OGN1_Packet &Packet)         // convert from an OGN packet
+   void Read(const uint8_t *Data) { memcpy(Byte, Data, Size); }
+
+   int Write(OGN1_Packet &Packet)                          // convert to an OGN packet
+   { Packet.HeaderWord=0;
+     Packet.Header.Address = Address;
+     Packet.Header.AddrType = Address<0xD00000?1:3;        // ICAO or OGN address-type ?
+     Packet.calcAddrParity();
+     Packet.Position.AcftType = AcftType;
+     Packet.EncodeAltitude(Altitude);
+     Packet.EncodeHeading(Heading*10);
+     Packet.EncodeSpeed(((uint32_t)Speed*527+512)>>10);    // [knot] => [0.1m/s]
+     Packet.EncodeLatitude(600000.0f*Latitude);
+     Packet.EncodeLongitude(600000.0f*Longitude);
+     Packet.Position.FixMode=1;
+     Packet.Position.FixQuality=1;
+     Packet.EncodeDOP(10);
+     Packet.clrTurnRate();
+     Packet.clrClimbRate();
+     Packet.clrBaro();
+     return 1; }
+
+   int Read(const OGN1_Packet &Packet)                     // convert from an OGN packet
    { Clear();
      Address  = Packet.Header.Address;                     // [24-bit]
      if(Packet.Header.NonPos) return 0;                    // encode only position packets
@@ -131,7 +152,6 @@ class PAW_Packet
             TypeByte, Address, Latitude, Longitude, Altitude, Heading, Speed, Seq, Msg[0], Msg[1], Msg[2]);
      for(int Idx=0; Idx<3; Idx++)
      { printf("%c", Msg[Idx]<' '?'.':Msg[Idx]); }
-     // printf(" %c%c%c\n", Relay?'R':'_', OGN?'O':'_', '0'+AddrType);
        printf(" %04X %04X\n", HeadWord, SpeedWord); }
 
   uint8_t Read(const char *Inp)                                      // read packet from a hex dump
@@ -156,7 +176,10 @@ class PAW_Packet
    void setCRC(void) { CRC = IntCRC(Byte, Size, 0x00); }                  // set the internal CRC of the packet
 
    uint8_t IntCRC(void) const { return IntCRC(Byte, Size, 0x00); }        // over all bytes it should be a zero
-                                                                          // thus XOR of all bytes including the CRC should be a zero
+   bool isPAW(void) const { return IntCRC()==0x00; }                      // thus XOR of all bytes including the CRC should be a zero
+
+   uint32_t ADSL_CRC(void) const { return ADSL_Packet::checkPI(Byte, Size); }   // ADS-L CRC check should be 0x000000 for an ADS-L packet
+   bool isADSL(void) const { return ADSL_CRC()==0x000000; }
 
    static uint8_t IntCRC(const uint8_t *Packet, int Len=Size, uint8_t CRC=0x00) // internal PAW packet CRC
    { for(int Idx=0; Idx<Len; Idx++)
@@ -212,29 +235,44 @@ class PAW_Packet
 
 class PAW_RxPacket: public PAW_Packet  // Received PilotAware packet
 { public:
-   // PAW_Packet Packet;
-   // uint8_t  CRC;            // []        external CRC (we assume it is correct)
-   uint8_t  CSNR;           // [0.5dB]  carrier Signal-to-Noise Ratio
-   uint8_t   SNR;           // [0.25dB]
-   int16_t FreqOfs;         // [10Hz]
    uint32_t Time;           // [sec]
    uint32_t nsTime;         // [nsec]
+   uint8_t  CSNR;           // [0.5dB]  carrier Signal-to-Noise Ratio
+   uint8_t   SNR;           // [0.25dB]
+   int16_t  FreqOfs;        // [10Hz]
+   uint16_t RxChan;
+   uint8_t  RxErr;
+   union
+   { uint8_t Flags;
+     struct
+     { bool PAW:1;
+       bool LDR:1;
+     } ;
+   } ;
 
   public:
-   void Print(void)
-   { printf("PAW: %d.%03ds: %02X:%06X [%+09.5f, %+010.5f]deg %4dm, %03ddeg %3dkt #%02X %3.1f/%3.1fdB %+4.1fkHz\n",
+   void Print(void) const
+   { printf("%d.%03ds %02X:%06X [%+09.5f, %+010.5f]deg %4dm, %03ddeg %3dkt #%02X %3.1f/%3.1fdB %+4.1fkHz\n",
             Time, nsTime/1000000, TypeByte, Address, Latitude, Longitude, Altitude, Heading, Speed,
             Seq, 0.25*SNR, 0.5*CSNR, 0.01*FreqOfs); }
 
+   int Print(char *Out) const
+   { if(!isADSL())
+       return sprintf(Out, "%d.%03ds %02X:%06X [%+09.5f, %+010.5f]deg %4dm, %03ddeg %3dkt #%02X %3.1f/%3.1fdB %+4.1fkHz\n",
+            Time, nsTime/1000000, TypeByte, Address, Latitude, Longitude, Altitude, Heading, Speed,
+            Seq, 0.25*SNR, 0.5*CSNR, 0.01*FreqOfs);
+     ADSL_Packet ADSL; memcpy(&ADSL.Version, Byte, 24); ADSL.Descramble();
+     int Len=ADSL.Print(Out);
+     Len+=sprintf(Out+Len, " %3.1f/%3.1fdB %+4.1fkHz\n", 0.25*SNR, 0.5*CSNR, 0.01*FreqOfs);
+     return Len; }
+
    uint32_t getSlotTime(void) const
-   { if(nsTime>=100000000) return Time;
+   { if(nsTime>=150000000) return Time;
      return Time-1; }
 
    int WriteStxJSON(char *JSON) const
    { int Len = PAW_Packet::WriteStxJSON(JSON);
-     uint32_t PosTime=Time; if(nsTime<300000000) PosTime--;
-     // if(OGN)
-     // { }
+     uint32_t PosTime=getSlotTime();
      Len+=Format_String(JSON+Len, ",\"time\":");
      Len+=Format_UnsDec(JSON+Len, PosTime);
      int64_t RxTime=(int64_t)Time-PosTime; RxTime*=1000; RxTime+=nsTime/1000000;
@@ -242,6 +280,6 @@ class PAW_RxPacket: public PAW_Packet  // Received PilotAware packet
      Len+=Format_SignDec(JSON+Len, RxTime, 4, 3, 1);
      return Len; }
 
-} ;
+}  __attribute__((packed)) ;
 
 #endif // __PAW_H__
