@@ -162,17 +162,20 @@ static Air530ZClass GPS;                      // GPS
 
 uint8_t I2C_Read (uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
 { Wire.beginTransmission(Addr);
-  int Ret=Wire.write(Reg);
-  Wire.endTransmission(false);
+  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 1; }
+  Ret=Wire.endTransmission(false); if(Ret!=1) return 1;
   Ret=Wire.requestFrom(Addr, Len);
-  for(uint8_t Idx=0; Idx<Len; Idx++)
-  { Data[Idx]=Wire.read(); }
-  return Ret!=Len; }
+  uint8_t Idx=0;
+  for( ; Idx<Len; Idx++)
+  { int Byte=Wire.read(); if(Byte<0) break;
+    Data[Idx]=Byte; }
+  return Ret!=Len || Idx!=Len; }
 
 uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
 { Wire.beginTransmission(Addr);
-  int Ret=Wire.write(Reg);
-  for(uint8_t Idx=0; Idx<Len; Idx++)
+  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 1; }
+  uint8_t Idx=0;
+  for( ; Idx<Len; Idx++)
   { Ret=Wire.write(Data[Idx]); if(Ret!=1) break; }
   Wire.endTransmission();
   return Ret!=1; }
@@ -1255,6 +1258,7 @@ void setup()
 #endif
 
   Serial.begin(Parameters.CONbaud);       // Start console/debug UART
+  Serial.println("OGN-Tracker for HELTEC CubeCell with GPS");
 
   Pixels.begin();                         // Start RGB LED
   Pixels.clear();
@@ -1285,10 +1289,10 @@ void setup()
 
   attachInterrupt(USER_KEY, Button_ChangeInt, CHANGE);
 
-  Serial.println("OGN Tracker on HELTEC CubeCell with GPS");
-
 #ifdef WITH_BMX280
   BMX280_Init();
+  if(Baro.ADDR) Serial.printf("BMx280 ADDR:%02X ID:%02X\n", Baro.ADDR, Baro.ID);
+           else Serial.printf("BMx280 not detected\n");
 #endif
 #ifdef WITH_BME280
   BME280_Init();

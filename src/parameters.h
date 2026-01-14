@@ -37,7 +37,7 @@ class FlashParameters
        uint8_t  AcftType:4;  // 1=glider, 2=towplane, 3=helicopter, etc.
        bool      NoTrack:1;  // unused
        bool      Stealth:1;  // used for OGN packets
-     } ;
+     } __attribute__((packed));
    } ;
 
    union
@@ -49,7 +49,8 @@ class FlashParameters
        bool      RFchipTypeHW:  1; // is this RFM69HW (Tx power up to +20dBm) ?
       uint8_t        FreqPlan:  3; // 0=default or force given frequency hopping plan
        bool         RelayMode:  1; // Static relay-mode: rarely transmit own position, priority to relays or other aircrafts
-     } ;
+       // 5 bits spare
+     } __attribute__((packed));
    } ;
 
     // int16_t  RFchipFreqCorr; // [0.1ppm] frequency correction for crystal frequency offset
@@ -61,7 +62,7 @@ class FlashParameters
      struct
      { uint32_t  CONbaud:24; // [bps] Console baud rate
        uint8_t   CONprot: 8; // [bit-mask] Console protocol mask: 0=minGPS, 1=allGPS, 2=Baro, 3=UBX, 4=OGN, 5=FLARM, 6=GDL90, 7=$PGAV5
-     } ;
+     } __attribute__((packed));
    } ;
 
     int16_t  PressCorr;      // [0.25Pa] pressure correction for the baro
@@ -80,7 +81,7 @@ class FlashParameters
        uint8_t  Verbose:2;   //
        uint8_t  NavRate:3;   // [Hz] GPS position report rate
         int8_t TimeCorr:3;   // [sec] it appears for ArduPilot you need to correct time by 3 seconds which is likely the leap-second issue
-     } ;
+     } __attribute__((packed));
    } ;                       //
 
    int16_t  GeoidSepar;      // [0.1m] Geoid-Separation, apparently ArduPilot MAVlink does not give this value (although present in the format)
@@ -90,14 +91,15 @@ class FlashParameters
   union
   { uint8_t  GNSS;
     struct
-    { bool EnableGPS :1;     //
-      bool EnableSBAS:1;     //
-      bool EnableGAL :1;     //
-      bool EnableBEI :1;     //
-      bool EnableIMES:1;     //
-      bool EnableQZSS:1;     //
-      bool EnableGLO :1;     //
-    } ;
+    { bool EnableGPS :1;     // 1
+      bool EnableSBAS:1;     // 1
+      bool EnableGAL :1;     // 1
+      bool EnableBEI :1;     // 0
+      bool EnableIMES:1;     // 0
+      bool EnableQZSS:1;     // 1
+      bool EnableGLO :1;     // 1
+      // one bit spare
+    } __attribute__((packed));
   } ;
 
    static const uint8_t InfoParmLen = 16; // [char] max. size of an infp-parameter
@@ -132,7 +134,7 @@ class FlashParameters
      struct
      { uint32_t PageMask:27;                          // enable/disable individual pages on the LCD or OLED screen
        uint8_t InitialPage:5;                         // the first page to show after boot
-     } ;
+     } __attribute__((packed));
    } ;
 
 #if defined(WITH_BT_SPP) || defined(WITH_BLE_SPP)
@@ -482,6 +484,24 @@ uint16_t StratuxPort;
     return 0; }
 #endif // WITH_STM32
 
+  static char AddrTypeChar(uint8_t AddrType)
+  { if(AddrType==3) return 'O';
+    if(AddrType==2) return 'F';
+    if(AddrType==1) return 'I';
+    return 'R'; }
+
+  char AddrTypeChar(void) const { return AddrTypeChar(AddrType); }
+
+  static const char *AcftTypeName(uint8_t AcftType)
+  { const char *TypeName[16] = { "----", "Glid", "Tow ", "Heli",
+                                 "SkyD", "Drop", "Hang", "Para",
+                                 "Pwrd", "Jet ", "UFO ", "Ball",
+                                 "Zepp", "UAV ", "Car ", "Fix " } ;
+    if(AcftType<16) return TypeName[AcftType];
+    return TypeName[0]; }
+
+  const char *AcftTypeName(void) const { return AcftTypeName(AcftType); }
+
   uint8_t Print(char *Line)       // print parameters on a single line, suitable for console output
   { uint8_t Len=0;
     Line[Len++]=HexDigit(AcftType); Line[Len++]=':';
@@ -621,7 +641,7 @@ uint16_t StratuxPort;
   { if( (ch>='0') && (ch<='9') ) return 1;  // numbers
     if( (ch>='A') && (ch<='Z') ) return 1;  // uppercase letters
     if( (ch>='a') && (ch<='z') ) return 1;  // lowercase letters
-    if(strchr(".@-+_/#", ch)) return 1;     // any of the listed special characters
+    if(strchr(".@-+_/#:", ch)) return 1;    // any of the listed special characters
     return 0; }
 
   static int8_t Read_String(char *Value, const char *Inp, uint8_t MaxLen)
@@ -636,9 +656,9 @@ uint16_t StratuxPort;
       Value[Idx]=0;
     return Val-Inp; }
 
-  static const char *SkipBlanks(const char *Inp)
+  static const char *SkipBlanks(const char *Inp) // skip space and all control codes thus below 32
   { for( ; ; )
-    { char ch=(*Inp); if(ch==0) break;
+    { char ch=(*Inp); if(ch==0) break;           // but stop on NL
       if(ch>' ') break;
       Inp++; }
     return Inp; }
@@ -699,8 +719,8 @@ uint16_t StratuxPort;
     { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
       GNSS=Mode; return 1; }
     if(strcmp(Name, "PageMask")==0)
-    { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
-      PageMask=Mode; return 1; }
+    { int32_t Mask=0; if(Read_Int(Mask, Value)<=0) return 0;
+      PageMask=Mask; return 1; }
     if(strcmp(Name, "InitialPage")==0)
     { int32_t Mode=0; if(Read_Int(Mode, Value)<=0) return 0;
       InitialPage=Mode; return 1; }
@@ -825,46 +845,63 @@ uint16_t StratuxPort;
     int Lines=ReadFromFile(File);
     fclose(File); return Lines; }
 
-  int Write_Hex(char *Line, const char *Name, uint32_t Value, uint8_t Digits)
+  template <class Type>
+   static int Write_Hex(char *Line, const char *Name, Type Value, uint8_t Digits)
   { uint8_t Len=Format_String(Line, Name, 14, 0);
     Len+=Format_String(Line+Len, " = 0x");
     Len+=Format_Hex(Line+Len, Value, Digits);
     Len+=Format_String(Line+Len, ";");
     Line[Len]=0; return Len; }
 
-  int Write_UnsDec(char *Line, const char *Name, uint32_t Value)
+  static int Write_UnsDec(char *Line, const char *Name, uint32_t Value)
   { uint8_t Len=Format_String(Line, Name, 14, 0);
     Len+=Format_String(Line+Len, " = ");
     Len+=Format_UnsDec(Line+Len, Value);
     Len+=Format_String(Line+Len, ";");
     Line[Len]=0; return Len; }
 
-  int Write_SignDec(char *Line, const char *Name, int32_t Value)
+  static int Write_Bool(char *Line, const char *Name, bool Value)
+  { uint8_t Len=Format_String(Line, Name, 14, 0);
+    Len+=Format_String(Line+Len, " = ");
+    Line[Len++] = '0'+Value;
+    Len+=Format_String(Line+Len, ";");
+    Line[Len]=0; return Len; }
+
+  static int Write_SignDec(char *Line, const char *Name, int32_t Value)
   { uint8_t Len=Format_String(Line, Name, 14, 0);
     Len+=Format_String(Line+Len, " = ");
     Len+=Format_SignDec(Line+Len, Value);
     Len+=Format_String(Line+Len, ";");
     Line[Len]=0; return Len; }
 
-  int Write_Float1(char *Line, const char *Name, int32_t Value)
+  static int Write_Float1(char *Line, const char *Name, int32_t Value)
   { uint8_t Len=Format_String(Line, Name, 14, 0);
     Len+=Format_String(Line+Len, " = ");
     Len+=Format_SignDec(Line+Len, Value, 2, 1);
     Len+=Format_String(Line+Len, ";");
     Line[Len]=0; return Len; }
 
-  int Write_String(char *Line, const char *Name, char *Value, uint8_t MaxLen=16)
+  static int Write_String(char *Line, const char *Name, const char *Value, uint8_t MaxLen)
   { uint8_t Len=Format_String(Line, Name, 14, 0);
     Len+=Format_String(Line+Len, " = ");
     Len+=Format_String(Line+Len, Value, 0, MaxLen);
     Line[Len]=0; return Len; }
+
+  static int Write_StringEsc(char *Line, const char *Str, uint8_t MaxLen)
+  { int Len=0;
+    for(uint8_t Idx=0; Idx<MaxLen; Idx++)
+    { char ch = Str[Idx]; if(ch==0) break;
+      if(isStringChar(ch)) { Line[Len++] = ch; continue; }
+      Line[Len++]='\\'; Line[Len++]='x'; Line[Len++]=HexDigit(ch>>4); Line[Len++]=HexDigit(ch&0x0F);
+    }
+    return Len; }
 
   int WriteToFile(FILE *File)
   { char Line[80];
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
-    Write_Hex    (Line, "Stealth"   ,          Stealth,        1); strcat(Line, " #  [ bool]\n"); if(fputs(Line, File)==EOF) return EOF;
+    Write_Bool   (Line, "Stealth"   ,          Stealth          ); strcat(Line, " #  [ bool]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_UnsDec (Line, "CONbaud"   ,          CONbaud          ); strcat(Line, " #  [  bps]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "CONprot"   ,          CONprot,        1); strcat(Line, " #  [ mask]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_SignDec(Line, "TxPower"   ,          TxPower          ); strcat(Line, " #  [  dBm]\n"); if(fputs(Line, File)==EOF) return EOF;
@@ -894,7 +931,7 @@ uint16_t StratuxPort;
     Write_UnsDec (Line, "Bluetooth" ,          BT_ON            ); strcat(Line, " #  [  1|0]\n"); if(fputs(Line, File)==EOF) return EOF;
 #endif
     for(uint8_t Idx=0; Idx<InfoParmNum; Idx++)
-    { Write_String (Line, OGN_Packet::InfoParmName(Idx), InfoParmValue(Idx)); strcat(Line, "; #  [char]\n"); if(fputs(Line, File)==EOF) return EOF; }
+    { Write_String (Line, OGN_Packet::InfoParmName(Idx), InfoParmValue(Idx), 16); strcat(Line, "; #  [char]\n"); if(fputs(Line, File)==EOF) return EOF; }
 #if defined(WITH_BT_SPP) || defined(WITH_BLE_SPP)
     strcpy(Line, "BTname         = "); strcat(Line, BTname); strcat(Line, "; #  [char]\n"); if(fputs(Line, File)==EOF) return EOF;
 #endif
@@ -932,7 +969,7 @@ uint16_t StratuxPort;
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); Format_String(Output, Line);
-    Write_Hex    (Line, "Stealth"   ,          Stealth,        1); strcat(Line, " #  [ bool]\n"); Format_String(Output, Line);
+    Write_Bool   (Line, "Stealth"   ,          Stealth          ); strcat(Line, " #  [ bool]\n"); Format_String(Output, Line);
     Write_UnsDec (Line, "CONbaud"   ,          CONbaud          ); strcat(Line, " #  [  bps]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "CONprot"   ,          CONprot,        1); strcat(Line, " #  [ mask]\n"); Format_String(Output, Line);
     Write_SignDec(Line, "TxPower"   ,          TxPower          ); strcat(Line, " #  [  dBm]\n"); Format_String(Output, Line);
@@ -971,7 +1008,7 @@ uint16_t StratuxPort;
     Write_Float1 (Line, "APtxPwr", (int32_t)10*APtxPwr/4); strcat(Line, " #  [ dBm]\n"); Format_String(Output, Line);
 #endif
     for(uint8_t Idx=0; Idx<InfoParmNum; Idx++)
-    { Write_String (Line, OGN_Packet::InfoParmName(Idx), InfoParmValue(Idx)); strcat(Line, "; #  [char]\n"); Format_String(Output, Line); }
+    { Write_String (Line, OGN_Packet::InfoParmName(Idx), InfoParmValue(Idx), 16); strcat(Line, "; #  [char]\n"); Format_String(Output, Line); }
 #ifdef WITH_STRATUX
     strcpy(Line, "StratuxWIFI    = "); strcat(Line, StratuxWIFI); strcat(Line, "; #  [char]\n"); Format_String(Output, Line);
     strcpy(Line, "StratuxPass    = "); strcat(Line, StratuxPass); strcat(Line, "; #  [char]\n"); Format_String(Output, Line);
@@ -995,6 +1032,6 @@ uint16_t StratuxPort;
 // #endif
   }
 
-} ;
+} /* __attribute__((packed)) */ ;
 
 #endif // __PARAMETERS_H__
