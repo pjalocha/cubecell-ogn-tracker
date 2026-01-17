@@ -163,7 +163,7 @@ static Air530ZClass GPS;                      // GPS
 uint8_t I2C_Read (uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
 { Wire.beginTransmission(Addr);
   int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 1; }
-  Ret=Wire.endTransmission(false); if(Ret!=1) return 1;
+  Ret=Wire.endTransmission(false); if(Ret) return Ret;
   Ret=Wire.requestFrom(Addr, Len);
   uint8_t Idx=0;
   for( ; Idx<Len; Idx++)
@@ -1291,8 +1291,8 @@ void setup()
 
 #ifdef WITH_BMX280
   BMX280_Init();
-  if(Baro.ADDR) Serial.printf("BMx280 ADDR:%02X ID:%02X\n", Baro.ADDR, Baro.ID);
-           else Serial.printf("BMx280 not detected\n");
+  if(Baro.ADDR) Serial.printf("BM%280 0x%02X\n", Baro.hasHumidity()?'E':'P', Baro.ADDR);
+           else Serial.printf("Neither BMP280 nor BME280 were detected\n");
 #endif
 #ifdef WITH_BME280
   BME280_Init();
