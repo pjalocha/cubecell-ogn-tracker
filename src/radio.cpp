@@ -17,7 +17,7 @@ bool    Radio_Slot    = 0;             // 0 = first TX/RX slot, 1 = second TX/RX
 uint8_t Radio_Channel = 0;             // hopping channel
 uint8_t Radio_SysID   = 0;             // current system: OGN/ADS-L/LDR
 
-uint8_t RX_OGN_Packets=0;
+uint8_t RX_OGN_Packets=0;              // [packets] counts packets received during every second
 
 static RadioEvents_t Radio_Events;
 
@@ -25,37 +25,37 @@ FreqPlan Radio_FreqPlan;               // RF hopping pattern
 
 FIFO<FSK_RxPacket, 16> RxFIFO;         // buffer for received packets
 
-Delay<uint8_t, 64> RX_OGN_CountDelay;   // to average the OGN packet rate over one minute
-uint16_t           RX_OGN_Count64=0;    // counts received packets for the last 64 seconds
+Delay<uint8_t, 64> RX_OGN_CountDelay;  // to average the OGN packet rate over one minute
+uint16_t           RX_OGN_Count64=0;   // counts received packets for the last 64 seconds
 
-LowPass2<int32_t, 4,2,4> RX_RSSI;       // low pass filter to average the RX noise
+LowPass2<int32_t, 4,2,4> RX_RSSI;      // low pass filter to average the RX noise
 
-LDPC_Decoder      Decoder;
+LDPC_Decoder      Decoder;             // Low Density Parity Code decoder for OGN FEC
 
 bool Radio_isIdle   (void) { return Radio.GetStatus()==RF_IDLE; }
 bool Radio_TxRunning(void) { return Radio.GetStatus()==RF_TX_RUNNING; }
 bool Radio_RxRunning(void) { return Radio.GetStatus()==RF_RX_RUNNING; }
 
-static void Radio_TxDone(void)  // when transmission completed
+static void Radio_TxDone(void)         // is called when transmission completes
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
   Radio_TxConfig(Radio_SysID);
-  Radio_RxConfig(Radio_SysID);               // refresh the receiver configuration
+  Radio_RxConfig(Radio_SysID);         // refresh the receiver configuration
   Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
-static void Radio_TxTimeout(void) // never happens, not clear under which conditions.
+static void Radio_TxTimeout(void)       // never happens, not clear under which conditions.
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   Radio_TxConfig(Radio_SysID);
   Radio_RxConfig(Radio_SysID);
   Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
-static void Radio_RxTimeout(void)                     // end-of-receive-period: not used for now
+static void Radio_RxTimeout(void)       // end-of-receive-period: not used for now
 { }
 
-int8_t Radio_CAD = 0;                                 // LoRa Carrier-Detect outcome
+int8_t Radio_CAD = 0;                   // LoRa Carrier-Detect outcome
 
-static void Radio_CadDone(bool CAD)                   // when carrier sense completes
+static void Radio_CadDone(bool CAD)     // when carrier sense completes
 { Radio_CAD=CAD; }
 
 // a new packet has been received callback - this should probably be a quick call
@@ -67,11 +67,11 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   SX126xGetPacketStatus(&RadioPktStatus);
   RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;
   FSK_RxPacket *RxPkt = RxFIFO.getWrite();                             // new packet in the RxFIFO
-  RxPkt->RSSI = -2*RSSI;                                               // [-0.5dBm]
-  RxPkt->Time = GPS_PPS_UTC;                                           // [sec]
-  RxPkt->msTime = msTime-GPS_PPS_ms;                                   // [ms] time since PPS
+  RxPkt->RSSI    = -2*RSSI;                                               // [-0.5dBm]
+  RxPkt->Time    = GPS_PPS_UTC;                                           // [sec]
+  RxPkt->msTime  = msTime-GPS_PPS_ms;                                   // [ms] time since PPS
   RxPkt->Channel = Radio_Channel;                                         // [ ] channel
-  RxPkt->SysID = Radio_SysID;
+  RxPkt->SysID   = Radio_SysID;
   RxPkt->Manchester = RxPkt->SysID!=Radio_SysID_LDR;                   // LDR is not Manchester encoded
   // Serial.printf("%02d.%4d: Radio_RxDone(, %d, , ) RSSI:%2d, SysID:%X Chan:%d\n",
   //         RxPkt->Time%60, RxPkt->msTime, Size, RxPkt->RSSI/2, RxPkt->SysID, RxPkt->Channel);
@@ -107,26 +107,26 @@ static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, Radio
   SX126xSetPacketParams(&SX126x.PacketParams);
   SX126xSetSyncWord((uint8_t *)SyncWord); }
 
-void Radio_TxConfig(uint8_t SysID)
+void Radio_TxConfig(uint8_t SysID)                             // Configure for GFSK transmission for give system
 { const uint8_t *SYNC;
   uint8_t PktLen;
-  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
   Radio.Standby();
-  if(SysID==Radio_SysID_LDR)
+  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
+  if(SysID==Radio_SysID_LDR)                                    // LDR is somewhat different
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
     BT=MOD_SHAPING_G_BT_1; }
   else
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20); }
   // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
   // Fixed-len [bool], CRC-on [bool], LoRa freq-hop [bool], LoRa hop-period [symbols], LoRa IQ-invert [bool], Timeout [ms]
-  Radio_UpdateConfig(SYNC, SyncLen, BT); }
+  Radio_UpdateConfig(SYNC, SyncLen, BT); }  // configure additional elements which are not included in SetTxConfig()
 
 void Radio_RxConfig(uint8_t SysID)
 { const uint8_t *SYNC;
   uint8_t PktLen;
-  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
+  RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   if(SysID==Radio_SysID_LDR)
   { Radio.SetRxConfig(MODEM_FSK,  50000,  38400, 0,  50000, 4, 100, 1, PktLen  , 0, 0, 0, 0, true);
     BT=MOD_SHAPING_G_BT_1; }

@@ -160,25 +160,41 @@ static Air530ZClass GPS;                      // GPS
 
 // ===============================================================================================
 
-uint8_t I2C_Read (uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
-{ Wire.beginTransmission(Addr);
-  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 1; }
-  Ret=Wire.endTransmission(false); if(Ret) return Ret;
-  Ret=Wire.requestFrom(Addr, Len);
-  uint8_t Idx=0;
-  for( ; Idx<Len; Idx++)
-  { int Byte=Wire.read(); if(Byte<0) break;
+static uint8_t I2C_Read(TwoWire &Wire, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+{ // Serial.printf("I2C_Read(%d, x%02X, x%02X, , [%d], %dms)\n", Bus, Addr, Reg, Len, Wait);
+  Wire.beginTransmission(Addr);
+  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 0xD; }
+  Ret=Wire.endTransmission(false); if(Ret) return Ret;   // return non-zero on error
+  Ret=Wire.requestFrom(Addr, Len);                       // returns the number of bytes returned from the device
+  // if(Ret!=Len) Serial.printf("I2C_Read(, x%02X, x%02X, ...) %d=>%d\n", Addr, Reg, Len, Ret);
+  if(Ret==Len) Ret=0;
+          else Ret=0xE;
+  for(uint8_t Idx=0; Idx<Len; Idx++)
+  { int Byte=Wire.read(); if(Byte<0) { Ret=0xF; break; }
     Data[Idx]=Byte; }
-  return Ret!=Len || Idx!=Len; }
+  // Serial.printf("I2C_Read() => %d:%d [%d]\n", Ret, Idx, Len);
+  return Ret; }
 
-uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+static uint8_t I2C_Write(TwoWire &Wire, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
 { Wire.beginTransmission(Addr);
-  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 1; }
+  int Ret=Wire.write(Reg); if(Ret!=1) { Wire.endTransmission(true); return 0xD; }
   uint8_t Idx=0;
   for( ; Idx<Len; Idx++)
   { Ret=Wire.write(Data[Idx]); if(Ret!=1) break; }
-  Wire.endTransmission();
-  return Ret!=1; }
+  Ret=Wire.endTransmission();
+  return Ret; }
+
+uint8_t I2C_Read(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+{ if(Bus!=0) return 0xB;
+  uint8_t Ret=I2C_Read(Wire, Addr, Reg, Data, Len, Wait);
+  // Serial.printf("I2C_Read(%d, x%02X, x%02X, , [%d], ) => %d\n", Bus, Addr, Reg, Len, Ret);
+  return Ret; }
+
+uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t Len, uint8_t Wait)
+{ if(Bus!=0) return 0xB;
+  uint8_t Ret=I2C_Write(Wire, Addr, Reg, Data, Len, Wait);
+  return Ret; }
+
 
 #ifdef WITH_BMX280
 static BME280   Baro;
@@ -191,9 +207,9 @@ static void BMX280_Init(void)
   if(Err==0) Baro.Calculate(); }
 
 static void BMX280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
-{ if(Baro.ADDR==0) return;
+{ if(Baro.ADDR==0) BMX280_Init();
   uint8_t Err=Baro.Acquire();
-  if(Err!=0) return;
+  if(Err!=0) { Baro.ADDR=0; return; }
   Baro.Calculate();
   GPS.Temperature = Baro.Temperature;            // [0.1degC]
   GPS.Pressure = Baro.Pressure;                  // [0.25Pa]
