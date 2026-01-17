@@ -734,6 +734,9 @@ static void OLED_Baro(const GPS_Position &GPS)                 // display pressu
 
   uint8_t Len=Format_String(Line, "No baro sensor");
   bool hasBaro=0;
+#ifdef WITH_BMX280
+   if(Baro.ADDR) { Len=sprintf(Line, "BM%280 ", Baro.hasHumidity()?'E':'P'); hasBaro=1; }
+#endif
 #ifdef WITH_BMP280
   if(BMP280_Addr) { Len=Format_String(Line, "BMP280 "); hasBaro=1; }
 #endif
@@ -749,7 +752,7 @@ static void OLED_Baro(const GPS_Position &GPS)                 // display pressu
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_LEFT);
   Display.drawString(0, 0, Line);
-#if defined(WITH_BMP280) || defined(WITH_BME280)
+#if defined(WITH_BMP280) || defined(WITH_BME280) || defined(WITH_BMX280)
   if(hasBaro)
   { Len=0;
     if(GPS.hasBaro)
