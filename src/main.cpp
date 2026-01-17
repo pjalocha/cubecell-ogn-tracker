@@ -1364,14 +1364,17 @@ static uint32_t MSH_Freq = 0;                // [Hz] if zero then transmission n
 static  uint8_t MSH_BackOff=0;               // [sec]
 #endif
 
-static int32_t  RxRssiSum=0;                 // sum RSSI readouts
+static int32_t  RxRssiSum=0;                 // [0.5dBm] sum RSSI readouts
 static int      RxRssiCount=0;               // count RSSI readouts
 
+static void RxRssiProc(int16_t RSSI) { RxRssiSum+=RSSI*2; RxRssiCount++; } // [dBm]
+
 static int16_t  TxRssiThres=0;               // [dBm] thresdhold for LBT
+static uint32_t TxPktCount=0;
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
 { if(RxRssiCount)
-  { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 10dB for the threshold
+  { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 20dB for the threshold
     // Serial.printf("RxRssi: Thres:%d %d/%d\n", TxRssiThres, RxRssiSum, RxRssiCount);
     RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
 
@@ -1498,11 +1501,12 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   Radio_TxConfig(Radio_SysID);
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
   Radio_RxConfig(Radio_SysID);
-  // Serial.printf("StartRFslot() Sys:%d Chan:%d Wait:%d\n", Radio_SysID, Radio_Channel, Wait);
+  // Serial.printf("RFslot Sys:%d Chan:%d TxPos:%d RssiThres:%+d TxPkt:%d\n",
+  //            Radio_SysID, Radio_Channel, TxPos, TxRssiThres, TxPktCount);
   Radio.RxBoosted(0);
   XorShift64(Random.Word);
-  TxTime0 = Random.RX  % 189;                                 // transmit times within slots
-  TxTime1 = Random.GPS % 199;
+  TxTime0 = Random.RX  % 97;                                 // transmit times within slots
+  TxTime1 = Random.GPS % 99;
   TxPkt0=TxPkt1=0;
   if(TxPos) TxPkt0 = TxPkt1 = &TxPosPacket;
   XorShift64(Random.Word);
@@ -1587,7 +1591,7 @@ void loop()
 
   CONS_Proc();                                                    // process input from the console
   if(GPS_Process()==0) { GPS_Idle++; }                            // process input from the GPS
-                  else { GPS_Idle=0; RxRssiSum+=2*Radio.Rssi(MODEM_FSK); RxRssiCount++; } // [0.5dBm]
+                  else { GPS_Idle=0; RxRssiProc(Radio.Rssi(MODEM_FSK)); } // [0.5dBm]
   if(GPS_State.BurstDone)                                         // if state is GPS not sending data
   { if(GPS_Idle<2)                                                // GPS (re)started sending data
     { GPS_State.BurstDone=0;                                      // change the state to GPS is sending data
@@ -1610,24 +1614,25 @@ void loop()
   }
 
   uint32_t SysTime = millis() - GPS_PPS_ms;
-  if(Radio_Slot==0)                                                  // while in the 1st sub-slot
+  if(Radio_Slot==0)                                             // while in the 1st sub-slot
   { if(TxPkt0 && SysTime>=TxTime0 && !Radio_TxRunning())        //
-    { int16_t RxRssi=Radio.Rssi(MODEM_FSK);
-      if(RxRssi>=TxRssiThres)
-      { int TxLen=0;
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
+      if(RxRssi<=TxRssiThres)
+      { int TxLen=0; // Serial.printf("1\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-        { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
         else
 #endif
-        { TxLen=OGN_ManchTx(*TxPkt0); }
+        { TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; }
         // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
         TxPkt0=0; }
       else
-      { TxTime0 += 10+Random.RX%47; }
+      { // Serial.printf("_");
+        TxTime0 += 10+Random.RX%47; }
     }
-    else if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
+    if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { Radio_Slot=1;
       Radio_TxConfig(Radio_SysID);
       Radio_RxConfig(Radio_SysID);
@@ -1638,20 +1643,21 @@ void loop()
     }
   } else                                                          // while in the 2nd sub-slot
   { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())
-    { int16_t RxRssi=Radio.Rssi(MODEM_FSK);
-      if(RxRssi>=TxRssiThres)
-      { int TxLen=0;
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
+      if(RxRssi<=TxRssiThres)
+      { int TxLen=0; // Serial.printf("2\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-        { TxLen=ADSL_ManchTx(ADSL_TxPacket); }
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
         else
 #endif
-        { TxLen=OGN_ManchTx(*TxPkt1); }
+        { TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; }
         // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
         TxPkt1=0; }
       else
-      { TxTime1 += 10+Random.RX%47; }
+      { // Serial.printf("-");
+        TxTime1 += 10+Random.RX%47; }
     }
   }
 
