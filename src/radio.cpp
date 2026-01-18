@@ -113,10 +113,10 @@ void Radio_TxConfig(uint8_t SysID)                             // Configure for 
   int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
   Radio.Standby();
   RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
-  if(SysID==Radio_SysID_LDR)                                    // LDR is somewhat different
+  if(SysID==Radio_SysID_LDR)                                    // LDR: +/-12.5kHz, 38.4bps, 5-byte preamble
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
     BT=MOD_SHAPING_G_BT_1; }
-  if(SysID==Radio_SysID_HDR)                                    // HDR is different too
+  if(SysID==Radio_SysID_HDR)                                    // HDR: +/-50kHz, 100kbps, 1-byte preamble
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 50000, 0, 200000, 0, 1, 1, 0, 0, 0, 0, 20); }
   else
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20); }
@@ -136,33 +136,8 @@ void Radio_RxConfig(uint8_t SysID)
   { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 250000, 0, 100, 1, PktLen*2, 0, 0, 0, 0, true); }
   // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadL>
   // FreqHopOn [bool], HopPeriod, IQinvert, rxContinous [bool]
-  if(SyncLen>2) Radio_UpdateConfig(SYNC+1, SyncLen-1, BT);
+  if(SyncLen>4) Radio_UpdateConfig(SYNC+1, SyncLen-1, BT);
           else  Radio_UpdateConfig(SYNC  , SyncLen  , BT); }
-
-
-#ifdef OBSOLETE
-
-#ifdef WITH_PAW
-static void PAW_TxConfig(void)  // RF chip config for PilotAWare transmissions: +/-12.5kHz, 38400bps, long preamble
-{ Radio.Standby();
-  Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0, 38400, 0, 10, 1, 0, 0, 0, 0, 20);
-  Radio_UpdateConfig(PAW_SYNC, 8, MOD_SHAPING_G_BT_05); }
-#endif
-
-#ifdef WITH_PAW
-// transmit PilotAWare packet
-static int PAW_Transmit(const PAW_Packet &TxPacket)
-{ PAW_TxConfig();
-  uint8_t Packet[TxPacket.Size+2];
-  for(uint8_t Idx=0; Idx<TxPacket.Size; Idx++)
-  { Packet[Idx] = TxPacket.Byte[Idx]; }
-  PAW_Packet::Whiten(Packet, TxPacket.Size);
-  Packet[TxPacket.Size] = PAW_Packet::CRC8(Packet, TxPacket.Size);
-  Radio.Send(Packet, TxPacket.Size+1);
-  return TxPacket.Size+1; }
-#endif
-
-#endif // OBSOLETE
 
 #ifdef WITH_MESHT
 void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz bandwidth, SF7, preamble:8, sync:0x2B, explicit header,
@@ -177,7 +152,6 @@ void MSH_TxConfig(void)              // setup for Meshtastic ShortFast: 250kHz b
 }
                              // 0x002B  // SX1262 LoRa SYNC is not the same as SX127x and so there are issues
                              // With RadioLib it was possible to set the SX1262 to send 0xF1 like sx1276, but here is does not work ?
-
 #endif
 
 #ifdef WITH_FANET
@@ -251,7 +225,7 @@ int LDR_Transmit(const ADSL_Packet &TxPacket)
   memcpy(Radio_TxPacket, SYNC_LDR+2, 6);                  // first copy the remaining 6 bytes of the pre-data part
   memcpy(Radio_TxPacket+6, &(TxPacket.Version), PktSize); // copy packet to the buffer (internal CRC is already set)
   Radio_TxPacket[6+PktSize] = PAW_Packet::CRC8(Radio_TxPacket+6, PktSize); // add external CRC
-  Radio.Send(Radio_TxPacket, 6+PktSize+1);
+  Radio.Send(Radio_TxPacket, PktSize+7);
   return PktSize; }
 #endif
 

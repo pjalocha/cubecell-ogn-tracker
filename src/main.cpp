@@ -1654,12 +1654,28 @@ void loop()
         TxTime0 += 10+Random.RX%29; TxRssiThres+=2; }
     }
     if(SysTime>=800)                                        // if 800ms from PPS then switch to the 2nd sub-slot
-    { Radio_Slot=1;
-// #ifdef WITH_TestHDR
-      if(ADSL_TxPkt)
+    {
+#ifdef WITH_TestLDR  // is not working... weird transmission appears on 869.525MHz
+      Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
+      if(ADSL_TxPkt && Radio_FreqPlan.Plan<=1)
+      { Radio_TxConfig(Radio_SysID_LDR);
+        Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
+        LDR_Transmit(ADSL_TxPacket);
+        Serial.printf(" => TxLDR");
+        delay(10); }
+      Serial.printf("\n");
+#endif
+#ifdef WITH_TestHDR  // is working fine and being received on ogn-tracker
+      Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
+      if(ADSL_TxPkt && Radio_FreqPlan.Plan<=1)
       { Radio_TxConfig(Radio_SysID_HDR);
-        HDR_Transmit(ADSL_TxPacket); }
-// #endif
+        Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
+        HDR_Transmit(ADSL_TxPacket);
+        Serial.printf(" => TxHDR");
+        delay(2); }
+      Serial.printf("\n");
+#endif
+      Radio_Slot=1;
       Radio_TxConfig(Radio_SysID);
       Radio_RxConfig(Radio_SysID);
       Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
