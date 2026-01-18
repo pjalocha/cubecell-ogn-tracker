@@ -5,7 +5,7 @@
 
 class FreqPlan
 { public:
-   uint8_t       Plan;  // 1=Europe, 2=USA/Canada, 3=Australia/Chile, 4=New Zeeland
+   uint8_t       Plan;  // 1=Europe, 2=USA/Canada, 3=Australia/Chile, 4=New Zealand
    // char      Name[16];
    uint8_t   Channels;  // number of channels
    uint32_t  BaseFreq;  // [Hz] base channel (#0) frequency
@@ -17,7 +17,7 @@ class FreqPlan
    { Plan=NewPlan;
           if(Plan==2) { BaseFreq=902200000; ChanSepar=400000; Channels=65; } // USA
      else if(Plan==3) { BaseFreq=917000000; ChanSepar=400000; Channels=24; } // Australia and South America
-     else if(Plan==4) { BaseFreq=869250000; ChanSepar=200000; Channels= 1; } // New Zeeland
+     else if(Plan==4) { BaseFreq=869225000; ChanSepar=200000; Channels= 1; } // New Zealand
      else if(Plan==5) { BaseFreq=916200000; ChanSepar=200000; Channels= 1; } // Israel
      else if(Plan==6) { BaseFreq=433200000; ChanSepar=200000; Channels= 8; } // Europe/Africa 434MHz
      else             { BaseFreq=868200000; ChanSepar=200000; Channels= 2; } // Europe/Africa 868MHz
@@ -30,12 +30,12 @@ class FreqPlan
    uint32_t getCenterFreq(void) { return BaseFreq + ChanSepar/2*(Channels-1); } // get the center frequency for the given frequency plan
 
    static const char *getPlanName(uint8_t Plan)
-   { static const char *Name[7] = { "Default", "EU/Africa", "USA/Canada", "Australia/Chile", "New Zeeland", "Israel", "EU/Africa 434MHz" } ;
+   { static const char *Name[7] = { "Default", "EU/Africa", "US/CA", "AU/Chile", "NZ", "Israel", "EU/Africa 434MHz" } ;
      if(Plan>=7) return 0;
      return Name[Plan]; }
 
    uint8_t getChannel  (uint32_t Time, uint8_t Slot=0, uint8_t OGN=1) const // OGN-tracker or FLARM, UTC time, slot: 0 or 1
-   { if(Channels<=1) return 0;                                              // if single channel (New Zeeland) return channel #0
+   { if(Channels<=1) return 0;                                              // if single channel (New Zealand) return channel #0
      if(Plan>=2)                                                            // if USA/Canada or Australia/South America
      { uint8_t Channel = FreqHopHash((Time<<1)+Slot) % Channels;            // Flarm hopping channel
        if(OGN)                                                              // OGN Tracker
@@ -56,26 +56,33 @@ class FreqPlan
    uint32_t getFrequency(uint32_t Time, uint8_t Slot=0, uint8_t OGN=1) const
    { uint8_t Channel=getChannel(Time, Slot, OGN); return BaseFreq+ChanSepar*Channel; } // return frequency [Hz] for given UTC time and slot
 
-   uint32_t getFreqOBAND(uint8_t Chan=2) const
-   { if(Plan<=1) return 869425000+50000*Chan;                                // Europe and default is 869.525MHz (5 channels for LDR)
+   uint32_t getFreqOBAND(void) const
+   { if(Plan<=1) return 869525000;                                           // Europe and default is 869.525MHz
+     if(Plan==4) return 869225000;                                           // New Zealand: center of the narrow 869.20-.25 ISM band
      return 0; }
 
-   uint32_t getFreqMESHT(void) const { return getFreqOBAND(); }
+   uint32_t getFreqMESHT(void) const
+   { if(Plan<=1) return 869525000;                                           // Europe and default is 869.525MHz
+     return 0; }
 
    uint32_t getFreqFANET(void) const
    { if(Plan<=1) return 868200000;                                           // Europe and default is 868.200MHz
+     if(Plan<=4) return 920800000;                                           // for USA/AU/NZ bandwidth is 500kHz
      return 0; }
-   //  uint32_t Freq1 = getFrequency(Time, 0, 0);
-   //  if(Plan==6) return Freq1;                                             // for 434MHz is same as "FLARM", which is never used there
-   //  uint32_t Freq2 = getFrequency(Time, 0, 1);
-   //  return (Freq1+Freq2)/2; }                                             // other hopping systems is half-way between FLARM and OGN
 
-   uint8_t static calcPlan(int32_t Latitude, int32_t Longitude) // get the frequency plan from Lat/Lon: 1 = Europe + Africa, 2 = USA/CAnada, 3 = Australia + South America, 4 = New Zeeland
+   static uint8_t calcPlan(int32_t Latitude, int32_t Longitude) // get the frequency plan from Lat/Lon: 1 = Europe + Africa, 2 = USA/CAnada, 3 = Australia + South America, 4 = New Zealand
    { if( (Longitude>=(-26*600000)) && (Longitude<=(60*600000)) ) return 1; // between -20 and 60 deg Lat => Europe + Africa: 868MHz band
      if( Latitude<(20*600000) )                                            // below 20deg latitude
-     { if( ( Longitude>(164*600000)) && (Latitude<(-30*600000)) && (Latitude>(-48*600000)) ) return 4;  // => New Zeeland
+     { if( ( Longitude>(164*600000)) && (Latitude<(-30*600000)) && (Latitude>(-48*600000)) ) return 4;  // => New Zealand
        return 3; }                                                         // => Australia + South America: upper half of 915MHz band
      return 2; }                                                           // => USA/Canada: full 915MHz band
+
+   static uint8_t HopChan1(uint32_t Time)
+   { XorShift32(Time);
+     Time *= 48271;
+     XorShift32(Time);
+     Time *= 48271;
+     return Time%3; }
 
   private:
    static uint32_t FreqHopHash(uint32_t Time)
@@ -85,6 +92,11 @@ class FreqPlan
      Time ^= Time>>4;
      Time *= 2057;
      return Time ^ (Time>>16); }
+
+   static void XorShift32(uint32_t &Seed)
+   { Seed ^= Seed << 13;
+     Seed ^= Seed >> 17;
+     Seed ^= Seed << 5; }
 
 } ;
 
