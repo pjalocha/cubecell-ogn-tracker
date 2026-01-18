@@ -43,6 +43,8 @@ void FNT_TxConfig(void);
 int OGN_ManchTx(const OGN_TxPacket<OGN1_Packet> &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
 #ifdef WITH_ADSL
 int ADSL_ManchTx(const ADSL_Packet &TxPacket, uint8_t *Sign=0, uint8_t SignLen=68);
+int HDR_Transmit(const ADSL_Packet &TxPacket);
+int LDR_Transmit(const ADSL_Packet &TxPacket);
 #endif
 
 void Radio_Init(void);

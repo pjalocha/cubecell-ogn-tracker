@@ -116,6 +116,8 @@ void Radio_TxConfig(uint8_t SysID)                             // Configure for 
   if(SysID==Radio_SysID_LDR)                                    // LDR is somewhat different
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
     BT=MOD_SHAPING_G_BT_1; }
+  if(SysID==Radio_SysID_HDR)                                    // HDR is different too
+  { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 50000, 0, 200000, 0, 1, 1, 0, 0, 0, 0, 20); }
   else
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20); }
   // Modem, TxPower, Freq-dev [Hz], LoRa bandwidth, Bitrate [bps], LoRa code-rate, preamble [bytes],
@@ -235,6 +237,12 @@ int ADSL_ManchTx(const ADSL_Packet &TxPacket, uint8_t *Sign, uint8_t SignLen)
 { Radio_TxConfig(Radio_SysID_ADSL);
   return ManchTransmit(&(TxPacket.Version), TxPacket.TxBytes-3, Sign, SignLen); }
 
+int HDR_Transmit(const ADSL_Packet &TxPacket)
+{ Radio_TxConfig(Radio_SysID_HDR);
+  int PktSize = TxPacket.TxBytes-3;
+  memcpy(Radio_TxPacket, &(TxPacket.Version), PktSize);
+  Radio.Send(Radio_TxPacket, PktSize);
+  return PktSize; }
 
 int LDR_Transmit(const ADSL_Packet &TxPacket)
 { Radio_TxConfig(Radio_SysID_LDR);

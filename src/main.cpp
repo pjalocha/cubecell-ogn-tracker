@@ -1356,7 +1356,7 @@ __attribute__((aligned(4)))
 static OGN_TxPacket<OGN1_Packet> TxPosPacket, TxStatPacket, TxRelPacket, TxInfoPacket; // OGN position, status and info packets
 #ifdef WITH_ADSL
 __attribute__((aligned(4)))
-static ADSL_Packet ADSL_TxPacket;           // ADS-L packet to be transmitted
+static ADSL_Packet ADSL_TxPacket;              // ADS-L packet to be transmitted
 #endif
 // static uint8_t OGN_Sign[68];                // digital signature to be appended to some position packets
 // static uint8_t OGN_SignLen=0;               // digital signature size, 64 + 1 or 2 bytes
@@ -1653,8 +1653,13 @@ void loop()
       { // Serial.printf("_");
         TxTime0 += 10+Random.RX%29; TxRssiThres+=2; }
     }
-    if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
+    if(SysTime>=800)                                        // if 800ms from PPS then switch to the 2nd sub-slot
     { Radio_Slot=1;
+// #ifdef WITH_TestHDR
+      if(ADSL_TxPkt)
+      { Radio_TxConfig(Radio_SysID_HDR);
+        HDR_Transmit(ADSL_TxPacket); }
+// #endif
       Radio_TxConfig(Radio_SysID);
       Radio_RxConfig(Radio_SysID);
       Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
