@@ -199,27 +199,26 @@ uint8_t I2C_Write(uint8_t Bus, uint8_t Addr, uint8_t Reg, uint8_t *Data, uint8_t
 #ifdef WITH_BMX280
 static BME280   Baro;
 
-static void BMX280_Init(void)
+static uint8_t BMX280_Init(void)
 { Baro.Bus=0;
-  uint8_t Err=Baro.CheckID();
-  if(Err==0) Err=Baro.ReadCalib();
-  if(Err==0) Err=Baro.Acquire();
-  if(Err==0) Baro.Calculate(); }
+  uint8_t Err=Baro.CheckID();                    // try to read the ID of the chip: if fails then sets ADDR=0
+  if(Err==0) Err=Baro.ReadCalib();               // if good then read the calibration table
+  return Err; }                                  // if returns zero then it all-good
 
 static void BMX280_Read(GPS_Position &GPS)       // read the pressure/temperature/humidity and put it into the given GPS record
-{ if(Baro.ADDR==0) BMX280_Init();
-  uint8_t Err=Baro.Acquire();
-  if(Err!=0) { Baro.ADDR=0; return; }
+{ GPS.hasBaro=0;
+  if(Baro.ADDR==0) { if(BMX280_Init()!=0) return; } // if not initialized then (re)initialize
+  uint8_t Err=Baro.Acquire();                       // Acquire measurements
+  if(Err!=0) { Baro.ADDR=0; return; }               // give up if it fails
   Baro.Calculate();
-  GPS.Temperature = Baro.Temperature;            // [0.1degC]
-  GPS.Pressure = Baro.Pressure;                  // [0.25Pa]
+  GPS.Temperature = Baro.Temperature;               // [0.1degC]
+  GPS.Pressure = Baro.Pressure;                     // [0.25Pa]
   GPS.StdAltitude = floorf(BaroAlt(0.25f*GPS.Pressure)*10+0.5);
   // GPS.StdAltitude = Atmosphere::StdAltitude((GPS.Pressure+2)>>2);;
   GPS.hasBaro=1;
   if(!Baro.hasHumidity()) return;
   GPS.Humidity=Baro.Humidity;
   GPS.hasHum=1; }
-
 #endif
 
 // ===============================================================================================
@@ -1310,8 +1309,8 @@ void setup()
 
 #ifdef WITH_BMX280
   BMX280_Init();
-  if(Baro.ADDR) Serial.printf("BM%280 0x%02X\n", Baro.hasHumidity()?'E':'P', Baro.ADDR);
-           else Serial.printf("Neither BMP280 nor BME280 were detected\n");
+  // if(Baro.ADDR) Serial.printf("BM%280 0x%02X\n", Baro.hasHumidity()?'E':'P', Baro.ADDR);
+  //          else Serial.printf("Neither BMP280 nor BME280 were detected\n");
 #endif
 #ifdef WITH_BME280
   BME280_Init();
@@ -1413,6 +1412,9 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
                    Radio_FreqPlan.Plan, RX_OGN_Count64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
     Len+=NMEA_AppendCheckCRNL(Line, Len);
     Serial.write((const uint8_t *)Line, Len); }
+#ifdef WITH_BMX280
+  BMX280_Read(GPS);
+#endif
 #ifdef WITH_BME280
   BME280_Read(GPS);
 #endif
@@ -1649,7 +1651,7 @@ void loop()
         TxPkt0=0; }
       else
       { // Serial.printf("_");
-        TxTime0 += 10+Random.RX%47; }
+        TxTime0 += 10+Random.RX%29; TxRssiThres+=2; }
     }
     if(SysTime >= 800)                                      // if 800ms from PPS then switch to the 2nd sub-slot
     { Radio_Slot=1;
@@ -1676,7 +1678,7 @@ void loop()
         TxPkt1=0; }
       else
       { // Serial.printf("-");
-        TxTime1 += 10+Random.RX%47; }
+        TxTime1 += 10+Random.RX%29; TxRssiThres+=2; }
     }
   }
 
