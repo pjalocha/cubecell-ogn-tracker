@@ -1666,14 +1666,14 @@ void loop()
       Serial.printf("\n");
 #endif
 #ifdef WITH_TestHDR  // is working fine and being received on ogn-tracker
-      Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
+      // Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
       if(ADSL_TxPkt && Radio_FreqPlan.Plan<=1)
       { Radio_TxConfig(Radio_SysID_HDR);
         Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
         HDR_Transmit(ADSL_TxPacket);
-        Serial.printf(" => TxHDR");
+        // Serial.printf(" => TxHDR");
         delay(2); }
-      Serial.printf("\n");
+      // Serial.printf("\n");
 #endif
       Radio_Slot=1;
       Radio_TxConfig(Radio_SysID);

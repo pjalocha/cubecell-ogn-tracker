@@ -32,7 +32,7 @@ uint32_t getUniqueAddress(void);
 
 #define HARD_NAME "OGN-CC"
 // #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "d1801"
+#define SOFT_NAME "HDR-25.01"
 
 #include "parameters.h"
 
