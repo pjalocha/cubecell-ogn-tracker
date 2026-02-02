@@ -709,7 +709,7 @@ static void OLED_GPS(const GPS_Position &GPS)                 // display time, d
   { uint8_t Len=0;
 /*
     if(GPS.Sec&1)
-    { Len+=Format_UnsDec(Line+Len, RX_OGN_Count64);
+    { Len+=Format_UnsDec(Line+Len, Radio_RxCount64);
       Len+=Format_String(Line+Len, "/min"); }
     else
     { Len+=Format_SignDec(Line+Len, RX_RSSI.getOutput()*5, 2, 1);
@@ -805,7 +805,7 @@ static void OLED_RF(void)                 // display RF-related data
     Display.drawString(0, 32, Line); }
 
   Len=0;
-  Len+=Format_UnsDec(Line+Len, (uint32_t)RX_OGN_Count64);
+  Len+=Format_UnsDec(Line+Len, (uint32_t)Radio_RxCount64);
   Len+=Format_String(Line+Len, "/min");
   Line[Len]=0;
   Display.setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -877,12 +877,37 @@ static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixel
 // ADS-L packets
 
 #ifdef WITH_ADSL
+template <class Type>
+ static uint8_t Limit(Type X, Type Low, Type Upp)
+{ if(X<Low) return Low;
+  if(X>Upp) return Upp;
+  return X; }
+
 static int getPosPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // encode position into an ADS-L packet
 { Packet.Init();
   Packet.setAddress    (Parameters.Address);
   Packet.setAddrTypeOGN(Parameters.AddrType);
   Packet.setAcftTypeOGN(Parameters.AcftType);
   GPS.Encode(Packet);
+  return 1; }
+
+static bool getTelemStatus(ADSL_Packet &Packet, const GPS_Position &GPS)
+{ Packet.Init(0x42);
+  Packet.setAddress    (Parameters.Address);
+  Packet.setAddrTypeOGN(Parameters.AddrType);
+  Packet.setRelay(0);
+  Packet.Telemetry.Header.TelemType=0x0;                            // 0 => device status
+  GPS.EncodeTelemetry(Packet);
+  uint8_t SNR = (GPS_SatSNR+2)/4;                                   // encode number of satellites and SNR in the Status packet
+  if(SNR>10) { SNR-=10; if(SNR>31) SNR=31; }
+        else { SNR=0; }
+  Packet.Telemetry.GPS.SNR=SNR;
+  Packet.Telemetry.Battery.Voltage  = EncodeUR2V8(BattVoltage/4);
+  int BattCap = ((int)BattVoltage-3300)/13;                            // approx. formula
+  Packet.Telemetry.Battery.Capacity = Limit(BattCap, 0, 63);
+  Packet.Telemetry.Radio.RxNoise = Limit(120+(int)floorf(0.5*RX_RSSI.getOutput()+0.5), 0, 63);
+  Packet.Telemetry.Radio.RxRate  = EncodeUR2V4(floorf((float)Radio_RxCount64/16+0.5f));
+  Packet.Telemetry.Radio.TxPower = Limit(Parameters.TxPower-10, 0, 15);
   return 1; }
 
 static bool getTelemSatSNR(ADSL_Packet &Packet)
@@ -907,16 +932,17 @@ static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to
   if(ADSL_RelayQueue.Packet[Idx].Rank==0) return 0;       // should not happen ...
   *Packet = ADSL_RelayQueue[Idx]->Packet;
   Packet->setRelay();
-  // Packet->Scramble();
-  // Packet->setCRC();
   ADSL_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
 static bool getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce an ADS-L packet
 { static uint8_t BackOff=0;
+  static uint8_t TelemType=0;
   if(BackOff) { BackOff--; return getPosPacket(Packet, GPS); }
-  BackOff=29+Random.RX%5;
-  return getTelemSatSNR(Packet); }
+  BackOff=13+Random.RX%5;
+  TelemType++; if(TelemType>=2) TelemType=0;
+  if(TelemType==0) return getTelemStatus(Packet, GPS);
+              else return getTelemSatSNR(Packet); }
 
 #endif
 
@@ -965,7 +991,7 @@ static int getStatusPacket(OGN1_Packet &Packet, const GPS_Position &GPS)
   Packet.Status.SatSNR = SatSNR;
   Packet.EncodeVoltage(((BattVoltage<<3)+62)/125);                     // [1/64V]
   Packet.Status.RadioNoise = -RX_RSSI.getOutput();                     // [-0.5dBm]
-  uint16_t RxRate = RX_OGN_Count64+1;
+  uint16_t RxRate = Radio_RxCount64+1;
   uint8_t RxRateLog2=0; RxRate>>=1; while(RxRate) { RxRate>>=1; RxRateLog2++; }
   Packet.Status.RxRate = RxRateLog2;
   uint8_t TxPower = Parameters.TxPower-4;
@@ -1389,11 +1415,14 @@ static void RxRssiProc(int16_t RSSI) { RxRssiSum+=RSSI*2; RxRssiCount++; } // [d
 
 static int16_t  TxRssiThres=0;               // [dBm] thresdhold for LBT
 static uint32_t TxPktCount=0;
+static uint32_t RxPktCount=0;
+
+const uint16_t SlotSwitchTime=800;           // [ms]
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
 { if(RxRssiCount)
-  { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 20dB for the threshold
-    // Serial.printf("RxRssi: Thres:%d %d/%d\n", TxRssiThres, RxRssiSum, RxRssiCount);
+  { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 10dB for the threshold
+    // Serial.printf("Radio: Thres:%ddB Tx:%d Rx:%d %d/slot\n", TxRssiThres, TxPktCount, RxPktCount, Radio_RxSlotPktCount);
     RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
 
   // Serial.printf("StartRFslot()\n");
@@ -1405,11 +1434,12 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   GPS_State.FixValid  = GPS.isValid();
   if(GPS_State.TimeValid && GPS_State.DateValid) { LED_Blue(); GPS_PPS_UTC = GPS.getUnixTime(); }    // if time and date are valid
                                            else  { LED_Yellow(); }
-  RX_OGN_Count64 += RX_OGN_Packets - RX_OGN_CountDelay.Input(RX_OGN_Packets); // add OGN packets received, subtract packets received 64 seconds ago
-  RX_OGN_Packets=0;                                                           // clear the received packet count
+  RxPktCount += Radio_RxSlotPktCount;
+  Radio_RxCount64 += Radio_RxSlotPktCount - Radio_RxCountDelay.Input(Radio_RxSlotPktCount); // add OGN packets received, subtract packets received 64 seconds ago
+  Radio_RxSlotPktCount=0;                                                           // clear the received packet count
   CleanRelayQueue(GPS_PPS_UTC);
   { uint8_t Len=sprintf(Line, "$POGNR,%d,%d,,%+4.1f,,,,%5.3f",
-                   Radio_FreqPlan.Plan, RX_OGN_Count64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
+                   Radio_FreqPlan.Plan, Radio_RxCount64, 0.5*RX_RSSI.getOutput(), 0.001*BattVoltage);
     Len+=NMEA_AppendCheckCRNL(Line, Len);
     Serial.write((const uint8_t *)Line, Len); }
 #ifdef WITH_BMX280
@@ -1516,10 +1546,10 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
   { if(!Radio_TxRunning()) break;
     delay(1); }
-  Radio_Slot=0;
-  Radio_SysID=Radio_SysID_OGN_ADSL;      // receive OGN and ADS-L in parallel
-  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
-  Radio_TxConfig(Radio_SysID);
+  Radio_Slot=0;                                              // setup for 1st slot
+  Radio_SysID=Radio_SysID_OGN_ADSL;                          // receive OGN and ADS-L in parallel
+  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1); // which channel to work on ?
+  Radio_TxConfig(Radio_SysID);                               //
   Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
   Radio_RxConfig(Radio_SysID);
   // Serial.printf("RFslot Sys:%d Chan:%d TxPos:%d RssiThres:%+d TxPkt:%d\n",
@@ -1578,12 +1608,12 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
 static void PPS_SoftEdge(uint32_t msTime, uint32_t msDelay)
 { uint32_t msDiff = msTime-GPS_PPS_ms; if(msDiff<=800) return;
   GPS_PPS_UTC++; GPS_PPS_ms=msTime-msDelay;
-  // printf("SoftPPS: %10d:%10d\r\n", GPS_PPS_UTC, GPS_PPS_ms);
+  // printf("SoftPPS: %10us %10ums msDelay:%u\n", GPS_PPS_UTC, GPS_PPS_ms, msDelay);
 }
 
 static void PPS_HardEdge(uint32_t msTime)
 { GPS_PPS_UTC++; GPS_PPS_ms=msTime;
-  // printf("HardPPS: %10d:%10d\r\n", GPS_PPS_UTC, GPS_PPS_ms);
+  // printf("HardPPS: %10us %10ums\n", GPS_PPS_UTC, GPS_PPS_ms);
 }
 
 static void PPS_Process(void)
@@ -1649,26 +1679,26 @@ void loop()
         // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
         TxPkt0=0; }
-      else
+      else                   // if channel RSSI too high then retry TX in 10..40 ms
       { // Serial.printf("_");
         TxTime0 += 10+Random.RX%29; TxRssiThres+=2; }
     }
-    if(SysTime>=800)                                        // if 800ms from PPS then switch to the 2nd sub-slot
+    if(SysTime>=SlotSwitchTime)                                        // if 800ms from PPS then switch to the 2nd sub-slot
     {
 #ifdef WITH_TestLDR  // is not working... weird transmission appears on 869.525MHz
-      Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
+      // Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
       if(ADSL_TxPkt && Radio_FreqPlan.Plan<=1)
       { Radio_TxConfig(Radio_SysID_LDR);
         Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
         LDR_Transmit(ADSL_TxPacket);
-        Serial.printf(" => TxLDR");
+        // Serial.printf(" => TxLDR");
         delay(10); }
-      Serial.printf("\n");
+      // Serial.printf("\n");
 #endif
 #ifdef WITH_TestHDR  // is working fine and being received on ogn-tracker
       // Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
       if(ADSL_TxPkt && Radio_FreqPlan.Plan<=1)
-      { Radio_TxConfig(Radio_SysID_HDR);
+      { Radio_TxConfig(Radio_SysID_HDR);  // this is already contained in HDR_Transmit() ?
         Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
         HDR_Transmit(ADSL_TxPacket);
         // Serial.printf(" => TxHDR");
@@ -1676,16 +1706,16 @@ void loop()
       // Serial.printf("\n");
 #endif
       Radio_Slot=1;
-      Radio_TxConfig(Radio_SysID);
+      Radio_TxConfig(Radio_SysID);                                          // setup for current system
+      Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);  // channel number
+      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));     // [Hz] frequency
       Radio_RxConfig(Radio_SysID);
-      Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
-      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
       Radio.RxBoosted(0);
       // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
-  { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())
-    { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
+  { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())        // if there is a packet to transmit and time has come
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi);   // [dBm] probe channel RSSI level
       if(RxRssi<=TxRssiThres)
       { int TxLen=0; // Serial.printf("2\n");
 #ifdef WITH_ADSL

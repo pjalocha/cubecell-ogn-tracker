@@ -17,7 +17,7 @@ bool    Radio_Slot    = 0;             // 0 = first TX/RX slot, 1 = second TX/RX
 uint8_t Radio_Channel = 0;             // hopping channel
 uint8_t Radio_SysID   = 0;             // current system: OGN/ADS-L/LDR
 
-uint8_t RX_OGN_Packets=0;              // [packets] counts packets received during every second
+uint8_t Radio_RxSlotPktCount=0;        // [packets] counts packets received during every second
 
 static RadioEvents_t Radio_Events;
 
@@ -25,8 +25,8 @@ FreqPlan Radio_FreqPlan;               // RF hopping pattern
 
 FIFO<FSK_RxPacket, 16> RxFIFO;         // buffer for received packets
 
-Delay<uint8_t, 64> RX_OGN_CountDelay;  // to average the OGN packet rate over one minute
-uint16_t           RX_OGN_Count64=0;   // counts received packets for the last 64 seconds
+Delay<uint8_t, 64> Radio_RxCountDelay;  // to average the OGN packet rate over one minute
+uint16_t           Radio_RxCount64=0;   // counts received packets for the last 64 seconds
 
 LowPass2<int32_t, 4,2,4> RX_RSSI;      // low pass filter to average the RX noise
 
@@ -62,7 +62,7 @@ static void Radio_CadDone(bool CAD)     // when carrier sense completes
 static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t SNR) // RSSI and SNR are not passed for FSK packets
 { // Serial.printf("Radio_RxDone(, %d, , ) SysID:%X Chan:%d\n", Size, Radio_SysID, Radio_Channel);
   uint32_t msTime=millis();
-  RX_OGN_Packets++;
+  Radio_RxSlotPktCount++;
   PacketStatus_t RadioPktStatus; // to get the packet RSSI: https://github.com/HelTecAutomation/CubeCell-Arduino/issues/236
   SX126xGetPacketStatus(&RadioPktStatus);
   RSSI = RadioPktStatus.Params.Gfsk.RssiAvg;
