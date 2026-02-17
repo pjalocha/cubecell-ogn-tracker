@@ -27,22 +27,22 @@
 #include "format.h"
 
 // Parameters stored in Flash
-class FlashParameters
+class __attribute__((packed, aligned(4))) FlashParameters
 { public:
    union
    { uint32_t  AcftID;       // identification: Private:AcftType:AddrType:Address - must be different for every tracker
-     struct
+     struct __attribute__((packed, aligned(4)))
      { uint32_t Address:24;  // address (ID)
        uint8_t  AddrType:2;  // 0=RND, 1=ICAO, 2=FLR, 3=OGN
        uint8_t  AcftType:4;  // 1=glider, 2=towplane, 3=helicopter, etc.
        bool      NoTrack:1;  // unused
        bool      Stealth:1;  // used for OGN packets
-     } __attribute__((packed));
+     } ;
    } ;
 
    union
    { uint32_t RFchip;
-     struct
+     struct __attribute__((packed, aligned(4)))
      { int16_t RFchipFreqCorr: 12; // [0.1ppm] frequency correction for crystal frequency offset
        int8_t  RFchipTempCorr:  4; // [degC] correction to the temperature measured in the RF chip
        int8_t         TxPower:  6; // [dBm] highest bit set => HW module (up to +20dBm Tx power)
@@ -59,17 +59,17 @@ class FlashParameters
 
    union
    { uint32_t Console;
-     struct
+     struct __attribute__((packed, aligned(4)))
      { uint32_t  CONbaud:24; // [bps] Console baud rate
        uint8_t   CONprot: 8; // [bit-mask] Console protocol mask: 0=minGPS, 1=allGPS, 2=Baro, 3=UBX, 4=OGN, 5=FLARM, 6=GDL90, 7=$PGAV5
-     } __attribute__((packed));
+     } ;
    } ;
 
     int16_t  PressCorr;      // [0.25Pa] pressure correction for the baro
 
    union
    { uint16_t Flags;
-     struct
+     struct __attribute__((packed, aligned(2)))
      { bool SaveToFlash:1;   // Save parameters from the config file to Flash
        bool PowerON    :1;
        bool SpareBit   :1;
@@ -81,12 +81,12 @@ class FlashParameters
        uint8_t  Verbose:2;   //
        uint8_t  NavRate:3;   // [Hz] GPS position report rate
         int8_t TimeCorr:3;   // [sec] it appears for ArduPilot you need to correct time by 3 seconds which is likely the leap-second issue
-     } __attribute__((packed));
+     } ;
    } ;                       //
 
    int16_t  GeoidSepar;      // [0.1m] Geoid-Separation, apparently ArduPilot MAVlink does not give this value (although present in the format)
                              //  or it could be a problem of some GPSes
-  uint8_t  PPSdelay;         // [ms] delay between the PPS and the data burst starts on the GPS UART (used when PPS failed or is not there)
+   uint8_t  PPSdelay;         // [ms] delay between the PPS and the data burst starts on the GPS UART (used when PPS failed or is not there)
 
   union
   { uint8_t  GNSS;
@@ -131,7 +131,7 @@ class FlashParameters
 
    union
    { uint32_t Page;
-     struct
+     struct __attribute__((packed, aligned(4)))
      { uint32_t PageMask:27;                          // enable/disable individual pages on the LCD or OLED screen
        uint8_t InitialPage:5;                         // the first page to show after boot
      } __attribute__((packed));
@@ -235,9 +235,7 @@ uint16_t StratuxPort;
 
   void setDefault(uint32_t UniqueAddr)
   { AcftID = ((uint32_t)DEFAULT_AcftType<<26) | 0x03000000 | (UniqueAddr&0x00FFFFFF);
-    RFchip         =         0; // this clears FreqCorr and other
-    // RFchipFreqCorr =         0; // [0.1ppm]
-    // RFchipTempCorr =         0; // [degC]
+    RFchipFreqCorr =         0; // [0.1ppm]
 #ifdef WITH_RFM69W
     TxPower        =        13; // [dBm] for RFM69W
     RFchipTypeHW   =         0;
@@ -705,7 +703,9 @@ uint16_t StratuxPort;
     { int32_t Corr=0; if(Read_Int(Corr, Value)<=0) return 0;
       TimeCorr=Corr; return 1; }
     if(strcmp(Name, "GeoidSepar")==0)
-    { return Read_Float1(GeoidSepar, Value)<=0; }
+    { int32_t Separ=0;
+      if(Read_Float1(Separ, Value)<=0) return 0;
+      GeoidSepar=Separ; return 1; }
     if(strcmp(Name, "manGeoidSepar")==0)
     { int32_t Man=0; if(Read_Int(Man, Value)<=0) return 0;
       manGeoidSepar=Man; return 1; }
@@ -832,11 +832,15 @@ uint16_t StratuxPort;
     return OK; }
 
   int ReadFromFile(FILE *File)
-  { char Line[80];                                                              // line buffer
+  { char Line[181];                                                              // line buffer
     size_t Lines=0;                                                             // count interpreted lines
     for( ; ; )                                                                  // loop over lines
-    { if(fgets(Line, 80, File)==0) break;                                       // break on EOF or other trouble reading the file
-      if(strchr(Line, '\n')==0) break;                                          // if no NL then break, line was too long
+    { if(fgets(Line, 179, File)==0) break;                                      // break on EOF or other trouble reading the file
+      if(strchr(Line, '\n')==0) {
+        strcat(Line,"\n");                                                      // try to add missing newline
+        Line[179] = '\n';                                                       // truncate oversized line
+        Line[180] = 0;
+      }
       if(ReadLine(Line)) Lines++; }                                             // interprete the line, count if positive
     return Lines; }                                                             // return number of interpreted lines
 
@@ -897,7 +901,7 @@ uint16_t StratuxPort;
     return Len; }
 
   int WriteToFile(FILE *File)
-  { char Line[80];
+  { char Line[180];
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
     Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); if(fputs(Line, File)==EOF) return EOF;
@@ -965,7 +969,7 @@ uint16_t StratuxPort;
     fclose(File); return Lines; }
 
   void Write(void (*Output)(char))
-  { char Line[80];
+  { char Line[180];
     Write_Hex    (Line, "Address"   ,          Address ,       6); strcat(Line, " # [24-bit]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "AcftType"  ,          AcftType,       1); strcat(Line, " #  [4-bit]\n"); Format_String(Output, Line);
     Write_Hex    (Line, "AddrType"  ,          AddrType,       1); strcat(Line, " #  [2-bit]\n"); Format_String(Output, Line);
@@ -1032,6 +1036,6 @@ uint16_t StratuxPort;
 // #endif
   }
 
-} /* __attribute__((packed)) */ ;
+} ;
 
 #endif // __PARAMETERS_H__

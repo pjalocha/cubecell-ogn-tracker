@@ -21,7 +21,7 @@
                            // nRF905, CC1101, SPIRIT1, RFM69 chips actually reverse the bit order within every byte
                            // thus on the air the bits appear MSbit first for every byte transmitted
 
-class OGN1_Packet          // Packet structure for the OGN tracker
+class __attribute__((packed, aligned(4))) OGN1_Packet  // Packet structure for the OGN tracker
 { public:
 
    static const int Words =  5;
@@ -32,7 +32,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
                            // E=Emergency, C=enCrypt/Custom, RR=Relay count, P=Parity, M=isMeteo/Other, TT=address Type, AA..=Address:24-bit
                            // When enCrypt/Custom is set the data (position or whatever) can only be decoded by the owner
                            // This option is indented to pass any type of custom data not foreseen otheriwse
-   struct
+   struct __attribute__((packed, aligned(4)))
    { unsigned int Address    :24; // aircraft address
      unsigned int AddrType   : 2; // address type: 0 = random, 1 = ICAO, 2 = FLARM, 3 = OGN
      unsigned int NonPos     : 1; // 0 = position packet, 1 = other information like status
@@ -65,7 +65,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
                            // Pilot status:
                            // 0: NNNN NNNN NNNN NNNN NNNN NNNN NNNN NNNN  Name: 9 char x 7bit or 10 x 6bit or Huffman encoding ?
                            // 1: NNNN NNNN NNNN NNNN NNNN NNNN NNNN NNNN
-   struct
+   struct __attribute__((packed, aligned(4)))
    {   signed int    Latitude:24; //                  // QQTT TTTT LLLL LLLL LLLL LLLL LLLL LLLL  QQ=fix Quality:2, TTTTTT=time:6, LL..=Latitude:24
      unsigned int        Time: 6; // [sec]            // time, just second thus ambiguity every every minute
      unsigned int  FixQuality: 2; //                  // 0 = none, 1 = GPS, 2 = Differential GPS (can be WAAS)
@@ -81,9 +81,9 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      unsigned int     Stealth: 1; //                  // not really used till now
      unsigned int    AcftType: 4; // [0..15]          // type of aircraft: 1 = glider, 2 = towplane, 3 = helicopter, ...
      unsigned int BaroAltDiff: 8; // [m]              // lower 8 bits of the altitude difference between baro and GPS
-   } __attribute__((packed)) Position;
+   } Position;
 
-   struct
+   struct __attribute__((packed, aligned(4)))
    { unsigned int Pulse     : 8; // [bpm]               // pilot: heart pulse rate
      unsigned int Oxygen    : 7; // [%]                 // pilot: oxygen level in the blood
      unsigned int SatSNR    : 5; // [dB]                // average SNR of GPS signals
@@ -110,15 +110,15 @@ class OGN1_Packet          // Packet structure for the OGN tracker
 
    union
    {      uint8_t Byte[16];
-     struct
+     struct __attribute__((packed, aligned(4)))
      {    uint8_t Data[14];      // [16x7bit]packed string of 16-char: 7bit/char
           uint8_t DataChars:  4; // [int] number of characters in the packed string
           uint8_t ReportType: 4; // [1]                 // 1 for the Info packets
           uint8_t Check;         // CRC check
-     }  __attribute__((packed));
+     } ;
    } Info;
 
-   struct
+   struct __attribute__((packed, aligned(4)))
    {   signed int    Latitude:24; //                  // Latitude of the measurement
      unsigned int        Time: 6; // [sec]            // time, just second thus ambiguity every every minute
      unsigned int            : 2; //                  // spare
@@ -134,9 +134,9 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      unsigned int            : 1; //                  // spare
      unsigned int  ReportType: 4; //                  // 2 for wind/thermal report
      unsigned int BaroAltDiff: 8; // [m]              // lower 8 bits of the altitude difference between baro and GPS
-   } __attribute__((packed)) Wind;
+   } Wind;
 
-   struct
+   struct __attribute__((packed, aligned(4)))
    {        uint8_t Time          : 6;                // [sec]
            uint16_t Humidity      :10;                // [0.1%]
            uint16_t Pressure;                         // [2 Pa]
@@ -169,14 +169,14 @@ class OGN1_Packet          // Packet structure for the OGN tracker
                 bool hasCap   :1;
               }  __attribute__((packed));
             } ;
-   } __attribute__((packed)) Meteo;                                           // Meteo
+   } Meteo;                                           // Meteo
 
-   struct
+   struct __attribute__((packed, aligned(4)))
    {      uint8_t Data[14];                           // up to 14 bytes od specific data
      unsigned int DataLen   : 4;                      // 0..14 number of bytes in the message
      unsigned int ReportType: 4;                      // 15 for the manufacturer specific mesage
      unsigned int ManufID   : 8;                      // Manufacturer identification: 0 for Cube-Board
-   } __attribute__((packed)) ManufMsg;                // manufacturer-specific message
+   } ManufMsg;                                        // manufacturer-specific message
 
   } ;
 
@@ -209,11 +209,14 @@ class OGN1_Packet          // Packet structure for the OGN tracker
    uint8_t Read(const char *Inp)
    { uint8_t Len=0;
      if(Inp[0]==' ') Inp++;
-     int Chars = Read_Hex(HeaderWord, Inp); if(Chars!=8) return 0;
+     uint32_t Word;
+     int Chars = Read_Hex(Word, Inp); if(Chars!=8) return 0;
+     HeaderWord=Word;
      Inp+=Chars; Len+=4;
      for( uint8_t Idx=0; Idx<4; Idx++)
      { if(Inp[0]==' ') Inp++;
-       int Chars = Read_Hex(Data[Idx], Inp); if(Chars!=8) return 0;
+       int Chars = Read_Hex(Word, Inp); if(Chars!=8) return 0;
+       Data[Idx]=Word;
        Inp+=Chars; Len+=4; }
      return Len; }
 
@@ -295,6 +298,18 @@ class OGN1_Packet          // Packet structure for the OGN tracker
              (1.0/64)*DecodeVoltage(), Status.TxPower+4, -0.5*Status.RadioNoise, (1<<Status.RxRate)-1 );
    }
 */
+
+   uint8_t getInfo(char *Value, uint8_t Type=5) const
+   { int Len=0;
+     uint8_t InfoType;
+     uint8_t Idx=0;
+     for( ; ; )
+     { uint8_t Chars = readInfo(Value, InfoType, Idx);
+       if(Chars==0) break;
+       if(InfoType==Type) return Len-1;
+       Idx+=Chars; }
+     return 0; }
+
    int PrintDeviceInfo(char *Out) const
    { int Len=0;
      char Value[16];
@@ -852,7 +867,7 @@ class OGN1_Packet          // Packet structure for the OGN tracker
      Out[Len++]='\n'; Out[Len]=0;
      return Len; }
 */
-   // OGN1_Packet() { Clear(); }
+   OGN1_Packet() { Clear(); }           // let unusued fields contain zeroes
    void Clear(void) { HeaderWord=0; Data[0]=0; Data[1]=0; Data[2]=0; Data[3]=0; }
 
    uint32_t getAddressAndType(void) const { return HeaderWord&0x03FFFFFF; } // Address with address-type: 26-bit
@@ -994,11 +1009,11 @@ class OGN1_Packet          // Packet structure for the OGN tracker
    uint8_t addInfo(const char *Value, uint8_t InfoType)  // add an info field
    { uint8_t Idx=Info.DataChars;                         // number of characters already in the info packet
      if(Idx) Idx++;                                      // if at least one already, then skip over the terminator
-     if(Idx>=15) return 0;
+     if(Idx>=15) return 0;                               // return zero when no more speca
      uint8_t Len=0;
      for( ; ; )
      { uint8_t Char = Value[Len]; if(Char==0) break;
-       if(Idx>=15) return 0;
+       if(Idx>=15) return 0;                             // return zero when no more space
        setInfoChar(Char, Idx++);
        Len++; }
      setInfoChar(InfoType, Idx);                         // terminating character

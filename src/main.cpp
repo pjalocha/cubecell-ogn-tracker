@@ -908,7 +908,7 @@ static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to
   *Packet = ADSL_RelayQueue[Idx]->Packet;
   Packet->setRelay();
   // Packet->Scramble();
-  // Packet->setCRC();
+  // Packet->setCRC24();
   ADSL_RelayQueue.decrRank(Idx);                           // reduce the rank of the packet selected for relay
   return 1; }
 
@@ -1500,7 +1500,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
     { ADSL_TxPkt = &TxPosPacket;
       getAdslPacket(ADSL_TxPacket, GPS);
       ADSL_TxPacket.Scramble();                              // this call hangs when -Os is used to compile
-      ADSL_TxPacket.setCRC();
+      ADSL_TxPacket.setCRC24();
       ADSL_TxSlot = Random.GPS&0x20; }
     else ADSL_TxPkt=0;
 #endif
@@ -1642,10 +1642,10 @@ void loop()
       { int TxLen=0; // Serial.printf("1\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
+        { /* TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; */ }
         else
 #endif
-        { TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; }
+        { /* TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; */ }
         // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
         TxPkt0=0; }
@@ -1690,10 +1690,10 @@ void loop()
       { int TxLen=0; // Serial.printf("2\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
+        { /* TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; */ }
         else
 #endif
-        { TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; }
+        { /* TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; */ }
         // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
         TxPkt1=0; }
