@@ -12,8 +12,8 @@
 
 extern FreqPlan Radio_FreqPlan;
 extern FIFO<FSK_RxPacket, 16> RxFIFO;
-extern Delay<uint8_t, 64> RX_OGN_CountDelay;
-extern uint16_t           RX_OGN_Count64;
+extern Delay<uint8_t, 64> Radio_RxCountDelay;
+extern uint16_t           Radio_RxCount64;
 extern LowPass2<int32_t, 4,2,4> RX_RSSI;
 
 extern    bool Radio_Slot;
@@ -22,7 +22,7 @@ extern uint8_t Radio_SysID;
 
 extern  int8_t Radio_CAD;
 
-extern uint8_t RX_OGN_Packets;
+extern uint8_t Radio_RxSlotPktCount;
 
 bool Radio_isIdle   (void);
 bool Radio_TxRunning(void);
