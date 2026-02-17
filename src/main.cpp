@@ -873,6 +873,11 @@ static void LED_Orange(void) { Pixels.setPixelColor( 0, 255,  48,   0, 0); Pixel
 static void LED_Yellow(void) { Pixels.setPixelColor( 0, 255,  96,   0, 0); Pixels.show(); }
 static void LED_Blue  (void) { Pixels.setPixelColor( 0,   0,   0, 255, 0); Pixels.show(); }
 static void LED_Violet(void) { Pixels.setPixelColor( 0,  64,   0, 255, 0); Pixels.show(); }
+
+// ===============================================================================================
+
+static uint32_t GhostSilent = 0;
+
 // ===============================================================================================
 // ADS-L packets
 
@@ -938,7 +943,12 @@ static bool GetRelayPacket(ADSL_Packet *Packet)           // prepare a packet to
 static bool getAdslPacket(ADSL_Packet &Packet, const GPS_Position &GPS)  // produce an ADS-L packet
 { static uint8_t BackOff=0;
   static uint8_t TelemType=0;
-  if(BackOff) { BackOff--; return getPosPacket(Packet, GPS); }
+  if(BackOff)
+  { BackOff--;
+    if(!GhostSilent) return getPosPacket(Packet, GPS); }
+  if(GhostSilent)
+  { BackOff=2+Random.RX%3;
+    return getTelemStatus(Packet, GPS); }
   BackOff=13+Random.RX%5;
   TelemType++; if(TelemType>=2) TelemType=0;
   if(TelemType==0) return getTelemStatus(Packet, GPS);
@@ -1041,7 +1051,8 @@ static int getMeshtGPS(const GPS_Position *Position)
   return 1; }
 
 static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
-{ int OK=Packet->setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
+{ if(Parameters.GhostMode) return 0;
+  int OK=Packet->setHeader(Parameters.Address, Parameters.AddrType, Parameters.AcftType, getUniqueID(), 5);
   if(!OK) return 0;
   static uint8_t InfoBackOff=0;
   int Len=0;
@@ -1067,7 +1078,8 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
 
 #ifdef WITH_FANET
 static int getFNTpacket(FANET_Packet &Packet, const GPS_Position &GPS) // encode position into a FANET packet
-{ if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
+{ if(GhostSilent) return 0;
+  if(GPS.Altitude>80000) return 0;                      // FANET altitude limit
   Packet.setAddress(Parameters.Address);
   GPS.EncodeAirPos(Packet, Parameters.AcftType, !Parameters.Stealth);
   return 1; }
@@ -1420,7 +1432,9 @@ static uint32_t RxPktCount=0;
 const uint16_t SlotSwitchTime=800;           // [ms]
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
-{ if(RxRssiCount)
+{ GhostSilent = Parameters.GhostMode;
+
+  if(RxRssiCount)
   { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 10dB for the threshold
     // Serial.printf("Radio: Thres:%ddB Tx:%d Rx:%d %d/slot\n", TxRssiThres, TxPktCount, RxPktCount, Radio_RxSlotPktCount);
     RX_RSSI.Process(RxRssiSum/RxRssiCount); RxRssiSum=0; RxRssiCount=0; }
@@ -1559,7 +1573,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   TxTime0 = Random.RX  % 97;                                 // transmit times within slots
   TxTime1 = Random.GPS % 99;
   TxPkt0=TxPkt1=0;
-  if(TxPos) TxPkt0 = TxPkt1 = &TxPosPacket;
+  if(TxPos && !GhostSilent) TxPkt0 = TxPkt1 = &TxPosPacket;
   XorShift64(Random.Word);
   static uint8_t InfoTxBackOff=0;
   static uint8_t InfoToggle=0;
@@ -1567,13 +1581,13 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   else
   { InfoToggle = !InfoToggle;
     int Ret=0;
-    if(InfoToggle) Ret=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
+    if(InfoToggle && !Parameters.GhostMode) Ret=getInfoPacket(TxInfoPacket.Packet);      // try to get the next info field
     if(Ret<=0) Ret=getStatusPacket(TxInfoPacket.Packet, GPS);   // if not any then prepare a status packet
     if(Ret>0)
     { TxInfoPacket.Packet.Whiten(); TxInfoPacket.calcFEC();     // prepare the packet for transmission
       if(Random.RX&0x10) TxPkt1 = &TxInfoPacket;                // put it randomly into 1st or 2nd time slot
                     else TxPkt0 = &TxInfoPacket;
-      InfoTxBackOff = 15 + (Random.RX%3);                       // 16+/-1
+      InfoTxBackOff = GhostSilent ? 2+Random.RX%3:15 + Random.RX%3;          // 16+/-1
     }
   }
   XorShift64(Random.Word);
