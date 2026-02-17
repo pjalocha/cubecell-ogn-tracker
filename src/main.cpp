@@ -913,6 +913,7 @@ static bool getTelemStatus(ADSL_Packet &Packet, const GPS_Position &GPS)
   Packet.Telemetry.Radio.RxNoise = Limit(120+(int)floorf(0.5*RX_RSSI.getOutput()+0.5), 0, 63);
   Packet.Telemetry.Radio.RxRate  = EncodeUR2V4(floorf((float)Radio_RxCount64/16+0.5f));
   Packet.Telemetry.Radio.TxPower = Limit(Parameters.TxPower-10, 0, 15);
+  // Serial.printf("TelemStatus\n");
   return 1; }
 
 static bool getTelemSatSNR(ADSL_Packet &Packet)
@@ -1432,7 +1433,7 @@ static uint32_t RxPktCount=0;
 const uint16_t SlotSwitchTime=800;           // [ms]
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
-{ GhostSilent = Parameters.GhostMode;
+{ GhostSilent = Parameters.GhostMode && Radio_RxCount64==0; // ghost-silence when ghost-mode and no traffic
 
   if(RxRssiCount)
   { TxRssiThres = RX_RSSI.getOutput()/2+10;  // add 10dB for the threshold
@@ -1543,7 +1544,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
     if(Radio_FreqPlan.Plan<=1)
     { ADSL_TxPkt = &TxPosPacket;
       getAdslPacket(ADSL_TxPacket, GPS);
-      ADSL_TxPacket.Scramble();                              // this call hangs when -Os is used to compile
+      ADSL_TxPacket.Scramble();                               // this call hangs when -Os is used to compile
       ADSL_TxPacket.setCRC24();
       ADSL_TxSlot = Random.GPS&0x20; }
     else ADSL_TxPkt=0;
@@ -1590,6 +1591,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
       InfoTxBackOff = GhostSilent ? 2+Random.RX%3:15 + Random.RX%3;          // 16+/-1
     }
   }
+  if(GhostSilent && ADSL_TxPkt) ADSL_TxPkt = &TxInfoPacket;
   XorShift64(Random.Word);
   static uint8_t RelayTxBackOff=0;
   if(RelayTxBackOff) RelayTxBackOff--;
@@ -1686,10 +1688,10 @@ void loop()
       { int TxLen=0; // Serial.printf("1\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
-        { /* TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; */ }
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; /* Serial.printf("ADSL #0\n"); */ }
         else
 #endif
-        { /* TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; */ }
+        { TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; /* Serial.printf("OGN #0\n"); */ }
         // Serial.printf("TX[0]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt0->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt0, TxLen);
         TxPkt0=0; }
@@ -1734,10 +1736,10 @@ void loop()
       { int TxLen=0; // Serial.printf("2\n");
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-        { /* TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; */ }
+        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; /* Serial.printf("ADSL #1\n"); */ }
         else
 #endif
-        { /* TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; */ }
+        { TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; /* Serial.printf("OGN #1\n"); */ }
         // Serial.printf("TX[1]:%4dms %08X [%d:%d] [%2d]\n",
         //          SysTime, TxPkt1->Packet.HeaderWord, SignKey.SignReady, SignTxPkt==TxPkt1, TxLen);
         TxPkt1=0; }
