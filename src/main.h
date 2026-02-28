@@ -30,9 +30,9 @@ uint32_t getUniqueAddress(void);
 #define HARDWARE_ID 0x03
 #define SOFTWARE_ID 0x01
 
-#define HARD_NAME "OGN-CC"
-// #define SOFT_NAME "2023.05.28"
-#define SOFT_NAME "HDR-25.01"
+// #define HARD_NAME "OGN-CC"
+#define SOFT_NAME "CC-02.20"
+// #define SOFT_NAME "HDR-25.01"
 
 #include "parameters.h"
 
