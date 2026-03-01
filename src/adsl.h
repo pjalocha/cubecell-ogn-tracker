@@ -9,7 +9,7 @@
 #include "bitcount.h"
 #include "format.h"
 
-class __attribute__((aligned(4))) ADSL_Packet
+class __attribute__((packed, aligned(4))) ADSL_Packet
 { public:
 
    const static uint8_t TxBytes = 27; // including SYNC, Length, actual packet content (1+20 bytes) and 3-byte CRC
@@ -67,7 +67,7 @@ class __attribute__((aligned(4))) ADSL_Packet
          uint16_t   Pressure:14; // [8 Pa]
           int8_t Temperature: 8; // [1/2 deg] -63..+63
          uint8_t    Humidity: 6; //
-         uint8_t    Spare   : 2;
+         uint8_t    Spare   : 2; // HAE, pressure-altitude, pressure sensor type ?
        } __attribute__((packed)) Baro;    // 5 bytes
        struct
        { uint16_t Voltage : 10;  // [4mV] VR 0.00-15.32V EncodeUR2V8()
@@ -283,7 +283,32 @@ class __attribute__((aligned(4))) ADSL_Packet
        return Len; }
      return 0; }
 
-   uint8_t Dump(char *Out)
+   uint8_t ReadDump(const char *Inp, bool LDR=0)
+   { uint8_t Len=0;
+     if(Inp[0]==' ') Inp++;
+     int Chars = Read_Hex(Length, Inp); if(Chars!=2) return 0;
+     Inp+=Chars; Len+=1;
+     Chars = Read_Hex(Version, Inp); if(Chars!=2) return 0;
+     Inp+=Chars; Len+=1;
+     for( uint8_t Idx=0; Idx<5; Idx++)
+     { if(Inp[0]==' ') Inp++;
+       uint32_t ReadWord=0;
+       int Chars = Read_Hex(ReadWord, Inp); if(Chars!=8) return 0;
+       Word[Idx]=ReadWord;
+       Inp+=Chars; Len+=4; }
+     if(Inp[0]==' ') Inp++;
+     Chars = Read_Hex(CRC24[0], Inp); if(Chars!=2) return 0;
+     Inp+=Chars; Len+=1;
+     Chars = Read_Hex(CRC24[1], Inp); if(Chars!=2) return 0;
+     Inp+=Chars; Len+=1;
+     Chars = Read_Hex(CRC24[2], Inp); if(Chars!=2) return 0;
+     Inp+=Chars; Len+=1;
+     if(LDR)
+     { Chars = Read_Hex(CRC8, Inp); if(Chars!=2) return 0;
+       Inp+=Chars; Len+=1; }
+     return Len; }
+
+   uint8_t Dump(char *Out, bool LDR=0)
    { uint8_t Len=0;
      Len+=Format_Hex(Out+Len, Length);
      Len+=Format_Hex(Out+Len, Version);
@@ -293,6 +318,7 @@ class __attribute__((aligned(4))) ADSL_Packet
      Len+=Format_Hex(Out+Len, CRC24[0]);
      Len+=Format_Hex(Out+Len, CRC24[1]);
      Len+=Format_Hex(Out+Len, CRC24[2]);
+     if(LDR) Len+=Format_Hex(Out+Len, CRC8);
      return Len; }
 
    uint8_t DumpBytes(char *Out)
@@ -646,6 +672,25 @@ class __attribute__((aligned(4))) ADSL_Packet
     uint32_t checkCRC24(void) const
     { return checkCRC24((const uint8_t *)&Version, TxBytes-3); }
 
+    uint32_t checkCRC32(void) const
+    { uint32_t CRC24=checkCRC24((const uint8_t *)&Version, TxBytes-3);
+      uint8_t  CRC8 =checkCRC8((const uint8_t *)&Version, TxBytes-3+1);
+      return (CRC24<<8) | CRC8; }
+
+    static uint8_t checkCRC8(const uint8_t *Packet, int Len, uint8_t CRC=0x71)
+    { for(int Idx=0; Idx<Len; Idx++)
+        CRC = passCRC8(Packet[Idx], CRC);
+      return CRC; }
+
+    static uint8_t passCRC8(uint8_t Byte, uint8_t CRC)
+    { const uint8_t Poly = 0x07;  // 0x107
+      CRC ^= Byte;
+      for(uint8_t Bit=0; Bit<8; Bit++)
+      { if(CRC&0x80) { CRC = (CRC<<1) ^ Poly; }
+                else { CRC = (CRC<<1)       ; }
+      }
+      return CRC; }
+
     void FlipBit(uint8_t BitIdx)
     { return FlipBit((uint8_t *)&Version, BitIdx); }
 
@@ -667,7 +712,7 @@ class __attribute__((aligned(4))) ADSL_Packet
           { if(BadBits<MaxBadBits)
             { BadBitIdx[BadBits]=ByteIdx;                               // store the bad bit index
               BadBitMask[BadBits]=Mask;
-              Syndrome[BadBits]=CRCsyndrome(ByteIdx*8+BitIdx); }
+              Syndrome[BadBits]=CRC24syndrome(ByteIdx*8+BitIdx); }
             BadBits++;
           }
           Mask>>=1;
@@ -697,7 +742,7 @@ class __attribute__((aligned(4))) ADSL_Packet
       uint8_t Mask=1; Mask<<=BitIdx;
       Byte[ByteIdx]^=Mask; }
 
-    static uint32_t CRCsyndrome(uint8_t Bit)
+    static uint32_t CRC24syndrome(uint8_t Bit)
     { const uint16_t PacketBytes = TxBytes-3;
       const uint16_t PacketBits = PacketBytes*8;
       const uint32_t Syndrome[PacketBits] = {
@@ -778,7 +823,7 @@ class __attribute__((packed, aligned(4))) ADSL_RxPacket
 
    union
    { uint8_t State;       // state bits and small values
-     struct
+     struct __attribute__((packed))
      { // bool Saved   :1;   // has been already saved in internal storage
        // bool Ready   :1;   // is ready for transmission
        // bool Sent    :1;   // has already been transmitted out
