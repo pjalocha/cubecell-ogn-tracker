@@ -1606,8 +1606,9 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
     delay(1); }
   Radio_Slot=0;                                              // setup for 1st slot
 #ifdef WITH_ADSL
-  if(PlanEU && HopChan==2)
-  { Radio_SysID=Radio_SysID_LDR;
+  if(PlanEU && HopChan<=2)                                   //
+  { if(HopChan==2) Radio_SysID=Radio_SysID_LDR;
+              else Radio_SysID=Radio_SysID_OGN_ADSL;
     Radio_Channel=HopChan;
     ADSL_TxSlot=0; }
   else
