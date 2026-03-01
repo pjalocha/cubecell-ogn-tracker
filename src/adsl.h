@@ -652,7 +652,7 @@ class __attribute__((aligned(4))) ADSL_Packet
     static int Correct(uint8_t *PktData, uint8_t *PktErr, const int MaxBadBits=6) // correct the manchester-decoded packet with dead/weak bits marked
     { const int Bytes=TxBytes-3;
       uint32_t CRC = checkCRC24(PktData, Bytes); if(CRC==0) return 0;
-      uint8_t ErrBit=FindCRCsyndrome(CRC);
+      uint8_t ErrBit=FindCRC24syndrome(CRC);
       if(ErrBit!=0xFF) { FlipBit(PktData, ErrBit); return 1; }
 
       uint8_t BadBitIdx[MaxBadBits];                                    // bad bit index
@@ -683,7 +683,7 @@ class __attribute__((aligned(4))) ADSL_Packet
         uint8_t Bit=0; while(BitExp>>=1) Bit++;
         PktData[BadBitIdx[Bit]]^=BadBitMask[Bit];
         CRC^=Syndrome[Bit]; if(CRC==0) return Count1s(GrayIdx);
-        uint8_t ErrBit=FindCRCsyndrome(CRC);
+        uint8_t ErrBit=FindCRC24syndrome(CRC);
         if(ErrBit!=0xFF)
         { FlipBit(PktData, ErrBit);
           return Count1s(GrayIdx)+1; }
@@ -728,7 +728,7 @@ class __attribute__((aligned(4))) ADSL_Packet
       if(Bit<PacketBits) return Syndrome[Bit];
       return 0; }
 
-    static uint8_t FindCRCsyndrome(uint32_t Syndr)              // quick search for a single-bit CRC syndrome
+    static uint8_t FindCRC24syndrome(uint32_t Syndr)              // quick search for a single-bit CRC syndrome
     { const uint16_t PacketBytes = TxBytes-3;
       const uint16_t PacketBits = PacketBytes*8;
       const uint32_t Syndrome[PacketBits] = {

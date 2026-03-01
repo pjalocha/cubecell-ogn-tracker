@@ -23,6 +23,9 @@ class FreqPlan
      else             { BaseFreq=868200000; ChanSepar=200000; Channels= 2; } // Europe/Africa 868MHz
    }
 
+   bool isAuto(void) const { return Plan==0; }
+   bool isEU  (void) const { return Plan==1; }
+
    void setPlan(int32_t Latitude, int32_t Longitude)
    { setPlan(calcPlan(Latitude, Longitude)); }
 
