@@ -107,16 +107,16 @@ static void Radio_UpdateConfig(const uint8_t *SyncWord, uint8_t SyncBytes, Radio
   SX126xSetPacketParams(&SX126x.PacketParams);
   SX126xSetSyncWord((uint8_t *)SyncWord); }
 
-void Radio_TxConfig(uint8_t SysID)                             // Configure for GFSK transmission for give system
+void Radio_TxConfig(uint8_t SysID)                              // Configure for GFSK transmission for give system
 { const uint8_t *SYNC;
   uint8_t PktLen;
-  int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);
+  int SyncLen = FSK_RxPacket::SysSYNC(SYNC, PktLen, SysID);     //
   Radio.Standby();
   RadioModShapings_t BT=MOD_SHAPING_G_BT_05;
   if(SysID==Radio_SysID_LDR)                                    // LDR: +/-12.5kHz, 38.4bps, 5-byte preamble
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 12500, 0,  38400, 0, 5, 1, 0, 0, 0, 0, 20);
     BT=MOD_SHAPING_G_BT_1; }
-  if(SysID==Radio_SysID_HDR)                                    // HDR: +/-50kHz, 100kbps, 1-byte preamble
+  else if(SysID==Radio_SysID_HDR)                               // HDR: +/-50kHz, 100kbps, 1-byte preamble
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower+8, 50000, 0, 200000, 0, 1, 1, 0, 0, 0, 0, 20); }
   else
   { Radio.SetTxConfig(MODEM_FSK, Parameters.TxPower  , 50000, 0, 100000, 0, 1, 1, 0, 0, 0, 0, 20); }
@@ -132,6 +132,8 @@ void Radio_RxConfig(uint8_t SysID)
   if(SysID==Radio_SysID_LDR)
   { Radio.SetRxConfig(MODEM_FSK,  50000,  38400, 0,  50000, 4, 100, 1, PktLen  , 0, 0, 0, 0, true);
     BT=MOD_SHAPING_G_BT_1; }
+  else if(SysID==Radio_SysID_HDR)                               // HDR: +/-50kHz, 100kbps, 1-byte preamble
+  { Radio.SetRxConfig(MODEM_FSK, 250000, 200000, 0, 250000, 0, 100, 1, PktLen, 0, 0, 0, 0, true); }
   else
   { Radio.SetRxConfig(MODEM_FSK, 200000, 100000, 0, 250000, 0, 100, 1, PktLen*2, 0, 0, 0, 0, true); }
   // Modem, Bandwidth [Hz], Bitrate [bps], CodeRate, AFC bandwidth [Hz], preamble [bytes], Timeout [bytes], FixedLen [bool], PayloadL>
@@ -220,11 +222,11 @@ int HDR_Transmit(const ADSL_Packet &TxPacket)
 
 int LDR_Transmit(const ADSL_Packet &TxPacket)
 { Radio_TxConfig(Radio_SysID_LDR);
-  int PktSize = TxPacket.TxBytes-3;
-  static const uint8_t SYNC_LDR [8] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71 };
+  int PktSize = TxPacket.TxBytes-3;                       // 24 bytes of the ADS-L packet
+  static const uint8_t SYNC_LDR [8] = { 0xB4, 0x2B, 0x00, 0x00, 0x00, 0x00, 0x18, 0x71 };  // this goes before the ADS-L pos. packet
   memcpy(Radio_TxPacket, SYNC_LDR+2, 6);                  // first copy the remaining 6 bytes of the pre-data part
   memcpy(Radio_TxPacket+6, &(TxPacket.Version), PktSize); // copy packet to the buffer (internal CRC is already set)
-  Radio_TxPacket[6+PktSize] = PAW_Packet::CRC8(Radio_TxPacket+6, PktSize); // add external CRC
+  Radio_TxPacket[6+PktSize] = PAW_Packet::CRC8(Radio_TxPacket+6, PktSize); // add the very last byte CRC8
   Radio.Send(Radio_TxPacket, PktSize+7);
   return PktSize; }
 #endif
