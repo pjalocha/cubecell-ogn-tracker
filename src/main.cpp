@@ -1162,7 +1162,8 @@ static void Radio_RxProcOGN(FSK_RxPacket *RxPkt)
 { uint8_t RxPacketIdx  = OGN_RelayQueue.getNew();                          // get place for this new packet
   OGN_RxPacket<OGN1_Packet> *RxPacket = OGN_RelayQueue[RxPacketIdx];
   uint8_t DecErr = RxPkt->Decode(*RxPacket, Decoder);                  // LDPC FEC decoder
-  // Serial.printf("%d: Radio_RxDone( , %d, %d, %d) RxErr=%d/%d %08X { %08X %08X }\n",
+  // Serial.printf("RxProOGN: RSSI:%d DecErr:%d RxErr:%d %08X\n", RxPkt->RSSI, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord);
+  // Serial.printf("%d: Radio_RxDone( , %2d, %d, %d) RxErr=%2d/%2d %08X { %08X %08X }\n",
   //         millis(), Size, RSSI, SNR, DecErr, RxPacket->RxErr, RxPacket->Packet.HeaderWord, Random.GPS, Random.RX);
   if(DecErr || RxPacket->RxErr>=10 ) { /* RxFIFO.Read(); LED_OFF(); */ return; }              // if FEC not correctly decoded or too many bit errors then give up
   uint8_t OwnPacket = ( RxPacket->Packet.Header.Address  == Parameters.Address  )       // is it my own packet (through a relay) ?
