@@ -4,8 +4,21 @@ OGN-Tracker implementation on the HELTEC CubeCell 6502 with GPS
 ## Functionality
 As of now the OGN transmission and relaying are implemented and working well.
 As well status and info messages are sent like other OGN-Trackers.
-Serial console prints GPS NMEA and setting parameters is possible via $POGNS sentence,
-however there is an issue with characters being lost thus this needs to be addressed.
+ADS-L transmission/reception/relay is implemented as well: M-Band and LDR mode.
+FANET transmission and optionally Meshtastic transmission as well is implemented.
+
+## Support the Development
+
+This project is open-source and developed in my spare time.
+If you find it useful, please support **development and research** related to the Open Glider Network:
+
+- OGN/ADS-L/FANET trackers
+- OGN ground receivers which form the base of the network
+- Stratux project: the OGN part
+- testing sotware and hardware, experimentation needed to improve things
+
+**Donate via PayPal:**
+https://paypal.me/paweljalocha
 
 ## Hardware
 The supplied ISM and GPS antennas do work but are not great:
