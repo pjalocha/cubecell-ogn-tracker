@@ -34,7 +34,37 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
            uint8_t Emergency   :3; // 1=OK
          } __attribute__((packed));
        } ;
-       uint8_t Position[11]; // Lat[24]/Lon[24]/Speed[8]/Alt[14]/Climb[9]/Track[9]
+       union
+       { uint8_t Position[11]; // Lat[24]/Lon[24]/Speed[8]/Alt[14]/Climb[9]/Track[9]
+         struct
+         {  int32_t Lat    :24;
+            int32_t Lon    :24;
+           uint16_t Speed  : 8;
+           uint16_t Alt    :14;
+           uint16_t Climb  : 9;
+           uint16_t Track  : 9;
+         } __attribute__((packed)) BasicPos;
+         struct
+         { union
+           { uint8_t Flags;
+             struct
+             { uint8_t AltType   :2;  // 0:HAE, 1:cabin baro, 2:static baro, 3:ext.
+               uint8_t ClimbType :1;  // 0:GPS, 1:baro (cabin or static, as above)
+               uint8_t SpeedType :1;  // 0:GPS, 1:airspeed
+               uint8_t TrackType :1;  // 0:GPS, 1:magnetic
+               uint8_t TurnType  :2;  // 0:GPS, 1:magnetic, 2:3-D accel, 3:high-tech (how about gyro-turn ?)
+               bool    BadGPS    :1;  // 1:GPS jamming/spoofing detected
+             } __attribute__((packed));
+           } ;
+           uint16_t ShortLat;       // aligned to 32-bits in this structure
+           uint16_t ShortLon;
+            uint8_t Turn;           //
+           uint16_t Speed     : 8;  // as in the BasicPos
+           uint16_t Alt       :14;
+           uint16_t Climb     : 9;
+           uint16_t Track     : 9;
+         } __attribute__((packed)) Air2airPos;
+       } ;
        union
        { uint8_t Integrity[2]; // SourceInteg[2]/DesignAssurance[2]/NavigationIntegrity[4]/NorizAccuracy[3]/VertAccuracy[2]/ValocityAccuracy[2]/Reserved[1]
          struct
@@ -190,10 +220,10 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
    { uint8_t Type=SatSNR.Header.GNSStype;
      if(Type==0) return PrintSatSNR(Out);
      if(Type==1) return PrintSatPPS(Out);
-     int Len=0;
+     // int Len=0;
      return 0; }
 
-   int PrintSatPPS(char *Out) const
+   int PrintSatPPS(char *Out) const  // print GNSS PPS monitor timestamp and status
    { int Len=0;
      uint8_t RefClock=SatPPS.Data.RefClock; if(RefClock==0) RefClock=1;
      Len+=sprintf(Out+Len, " SatPPS: %08X:%08X/%dMHz/%3.1fus %+dppm %3.1fus %ds",
@@ -203,7 +233,7 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
               SatPPS.Data.PPScount );
      return Len; }
 
-   int PrintSatSNR(char *Out) const
+   int PrintSatSNR(char *Out) const  // print GNSS constellations monitor status
    { int Len=0;
      const char *SysName[5] = { "QZ", "GP", "GL", "GA", "BD" };
      Len+=sprintf(Out+Len, " SatSNR:");
@@ -282,6 +312,115 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
          Len+=PrintGNSS(Out+Len); }
        return Len; }
      return 0; }
+
+   uint8_t WriteAPRS(char *Msg, uint32_t Time, int32_t GeoidSepar=40, const char *ProtName="OGADSL")    // write an APRS position message
+   { uint8_t Len=0;
+     static const char *AddrTypeName[8] = { "RND", "RND", "RND", "RND", "RND", "ICA", "FLR", "OGN" } ;
+     uint8_t AddrType=getAddrTable();
+     if(AddrType<8) { memcpy(Msg+Len, AddrTypeName[AddrType], 3); Len+=3; }
+              else  { Msg[Len++]='A'; Len+=Format_Hex(Msg+Len, AddrType); }
+     uint32_t Address=getAddress();
+     Len+=Format_Hex(Msg+Len, (uint8_t)(Address>>16));
+     Len+=Format_Hex(Msg+Len, (uint16_t)(Address));
+     Msg[Len++] = '>';
+     uint8_t ProtLen = strlen(ProtName);
+     memcpy(Msg+Len, ProtName, ProtLen); Len+=ProtLen;
+     if(isRelay()) { memcpy(Msg+Len, ",RELAY*", 7); Len+=7; }
+     Msg[Len++] = ':';
+
+     bool isPos=isPosition();
+     int16_t msTime=0;
+     if(isPos) Time = getTime(msTime, Time, 3);
+     Msg[Len++] = isPos ? '/':'>';
+     Len+=Format_HHMMSS(Msg+Len, Time);
+     Msg[Len++] = 'h';
+     if(isTelemetry())
+     { Msg[Len++]=' ';
+       return Len; }
+     if(!isPos) return 0;
+
+     uint8_t AcftType = getAcftTypeOGN();
+     const char *Icon = getAprsIcon(AcftType);
+
+     int32_t Lat = getLatOGN();
+     bool NegLat = Lat<0; if(NegLat) Lat=(-Lat);
+     uint32_t LatDeg = Lat/600000;
+     Len+=Format_UnsDec(Msg+Len, LatDeg, 2);
+     Lat -= LatDeg*600000;
+     uint32_t LatMin = Lat/100;
+     Len+=Format_UnsDec(Msg+Len, LatMin, 4, 2);
+     Lat -= LatMin*100;
+     Msg[Len++] = NegLat ? 'S':'N';
+     Msg[Len++] = Icon[0];
+
+     int32_t Lon = getLonOGN();
+     bool NegLon = Lon<0; if(NegLon) Lon=(-Lon);
+     uint32_t LonDeg = Lon/600000;
+     Len+=Format_UnsDec(Msg+Len, LonDeg, 3);
+     Lon -= LonDeg*600000;
+     uint32_t LonMin = Lon/100;
+     Len+=Format_UnsDec(Msg+Len, LonMin, 4, 2);
+     Lon -= LonMin*100;
+     Msg[Len++] = NegLon ? 'W':'E';
+     Msg[Len++] = Icon[1];
+
+     uint32_t Track=getTrack();                              // [9-bit cordic]
+     Len+=Format_UnsDec(Msg+Len, (Track*90+0x40)>>7, 3);
+     Msg[Len++] = '/';
+     uint32_t Speed = getSpeed();                            // [0.25m/s]
+     Len+=Format_UnsDec(Msg+Len, (Speed*1990+2048)>>12, 3);
+     if(hasAlt())
+     { Msg[Len++] = '/'; Msg[Len++] = 'A'; Msg[Len++] = '=';
+       int32_t Alt = getAlt()-GeoidSepar;                      // [m]
+       if(Alt>=0) Len+=Format_UnsDec(Msg+Len, (uint32_t)MetersToFeet(Alt), 6);
+            else  { Alt = (-Alt); Msg[Len++] = '-'; Len+=Format_UnsDec(Msg+Len, (uint32_t)MetersToFeet(Alt), 5); }
+     }
+
+     Msg[Len++] = ' ';
+     Msg[Len++] = '!';
+     Msg[Len++] = 'W';
+     Msg[Len++] = '0'+Lat/10;
+     Msg[Len++] = '0'+Lon/10;
+     Msg[Len++] = '!';
+
+     if(AddrType<=4) AddrType=0;
+     else if(AddrType<8) AddrType-=4;
+     else AddrType=3;
+     Msg[Len++] = ' '; Msg[Len++] = 'i'; Msg[Len++] = 'd';
+     Len+=Format_Hex(Msg+Len, ((uint32_t)AcftType<<26) | ((uint32_t)AddrType<<24) | Address);
+
+     if(hasClimb())
+     { Msg[Len++] = ' ';
+       Len+=Format_SignDec(Msg+Len, ((int32_t)getClimb()*6299+128)>>8, 3);
+       Msg[Len++] = 'f'; Msg[Len++] = 'p'; Msg[Len++] = 'm'; }
+
+     Msg[Len++] = ' ';  Msg[Len++] = 'g'; Msg[Len++] = 'p'; Msg[Len++] = 's';
+     Len+=Format_UnsDec(Msg+Len, (uint32_t)getHorAccur());
+     Msg[Len++] = 'x'; Len+=Format_UnsDec(Msg+Len, (uint32_t)getVerAccur());
+
+     Msg[Len]=0; return Len; }
+
+   static const char *getAprsIcon(uint8_t AcftType)
+   { static const char *AprsIcon[16] = // Icons for various FLARM acftType's
+     { "/z",  //  0 = ?
+       "/'",  //  1 = (moto-)glider    (most frequent)
+       "/'",  //  2 = tow plane        (often)
+       "/X",  //  3 = helicopter       (often)
+       "/g" , //  4 = parachute        (rare but seen - often mixed with drop plane)
+       "\\^", //  5 = drop plane       (seen)
+       "/g" , //  6 = hang-glider      (rare but seen)
+       "/g" , //  7 = para-glider      (rare but seen)
+       "\\^", //  8 = powered aircraft (often)
+       "/^",  //  9 = jet aircraft     (rare but seen)
+       "/z",  //  A = UFO              (people set for fun)
+       "/O",  //  B = balloon          (seen once)
+       "/O",  //  C = airship          (seen once)
+       "/'",  //  D = UAV              (drones, can become very common)
+       "/z",  //  E = ground support   (ground vehicles at airfields)
+       "\\n"  //  F = static object    (ground relay ?)
+     } ;
+     return AcftType<16 ? AprsIcon[AcftType]:0;
+   }
 
    uint8_t ReadDump(const char *Inp, bool LDR=0)
    { uint8_t Len=0;
@@ -470,51 +609,75 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
     int32_t getLatUBX(void) const { return FNTtoUBX(getLat()); }
     int32_t getLonUBX(void) const { return FNTtoUBX(getLon()); }
 
-    int32_t getLat(void) const { int32_t Lat=get3bytes(Position  ); Lat<<=8; Lat>>=1; return Lat; } // FANET-cordic
-    int32_t getLon(void) const { int32_t Lon=get3bytes(Position+3); Lon<<=8; return Lon; }          // FANET-cordic
-
     void setLatOGN(int32_t Lat)  { setLat(OGNtoFNT(Lat)); }
     void setLonOGN(int32_t Lon)  { setLon(OGNtoFNT(Lon)); }
 
     void setLatUBX(int32_t Lat)  { setLat(UBXtoFNT(Lat)); }
     void setLonUBX(int32_t Lon)  { setLon(UBXtoFNT(Lon)); }
 
-    void    setLat(int32_t Lat)  { Lat = (Lat+0x40)>>7; set3bytes(Position  , Lat); }           // FANET-cordic
-    void    setLon(int32_t Lon)  { Lon = (Lon+0x80)>>8; set3bytes(Position+3, Lon); }           // FANET-cordic
+    void    setLat(int32_t Lat)  { BasicPos.Lat = (Lat+0x40)>>7; }                            // FANET-cordic
+    void    setLon(int32_t Lon)  { BasicPos.Lon = (Lon+0x80)>>8; }
+    int32_t getLat(void) const { int32_t Lat=BasicPos.Lat; Lat<<=8; Lat>>=1; return Lat; }    // FANET-cordic
+    int32_t getLon(void) const { int32_t Lon=BasicPos.Lon; Lon<<=8; return Lon; }
 
-    uint16_t getSpeed(void) const { return UnsVRdecode<uint16_t,6>(Position[6]); }              // [0.25 m/s]
-    void setSpeed(uint16_t Speed) { Position[6] = UnsVRencode<uint16_t,6>(Speed); }             // [0.25 m/s]
-    bool hasSpeed(void) const { return Position[6]!=0xFF; }
-    void clrSpeed(void) { Position[6]=0xFF; }
+    // void    setLat(int32_t Lat)  { Lat = (Lat+0x40)>>7; set3bytes(Position  , Lat); }           // FANET-cordic
+    // void    setLon(int32_t Lon)  { Lon = (Lon+0x80)>>8; set3bytes(Position+3, Lon); }           // FANET-cordic
+    // int32_t getLat(void) const { int32_t Lat=get3bytes(Position  ); Lat<<=8; Lat>>=1; return Lat; } // FANET-cordic
+    // int32_t getLon(void) const { int32_t Lon=get3bytes(Position+3); Lon<<=8; return Lon; }          // FANET-cordic
 
-   int32_t getAlt(void) const                                                                   // [m]
-   { int32_t Word=Position[8]&0x3F; Word<<=8; Word|=Position[7];
-     return UnsVRdecode<int32_t,12>(Word)-320; }
+    uint16_t getSpeed(void) const { return UnsVRdecode<uint16_t,6>(BasicPos.Speed); }
+    void setSpeed(uint16_t Speed) { BasicPos.Speed = UnsVRencode<uint16_t,6>(Speed); }           // [0.25 m/s]
+    bool hasSpeed(void) const { return BasicPos.Speed!=0xFF; }                                   // is Speed valid
+    void clrSpeed(void)              { BasicPos.Speed=0xFF; }                                    // mark as invalid
+
+    // uint16_t getSpeed(void) const { return UnsVRdecode<uint16_t,6>(Position[6]); }              // [0.25 m/s]
+    // void setSpeed(uint16_t Speed) { Position[6] = UnsVRencode<uint16_t,6>(Speed); }             // [0.25 m/s]
+    // bool hasSpeed(void) const { return Position[6]!=0xFF; }
+    // void clrSpeed(void) { Position[6]=0xFF; }
+
+   int32_t getAlt(void) const { return UnsVRdecode<int32_t,12>(BasicPos.Alt)-320; }                                                                  // [m]
    void setAlt(int32_t Alt)
    { Alt+=320; if(Alt<0) Alt=0;
-     int32_t Word=UnsVRencode<uint32_t,12>(Alt);
-     Position[7]=Word;
-     Position[8] = (Position[8]&0xC0) | (Word>>8); }
-   bool hasAlt(void) const { return (Position[8]&0x3F)==0x3F && Position[7]==0xFF; }             // is altitude valid ?
-   void clrAlt(void) { Position[8]|=0x3F; Position[7]=0xFF; }                                   // declare invalid altitude
+     BasicPos.Alt=UnsVRencode<uint32_t,12>(Alt); }
+   bool hasAlt(void) const { return BasicPos.Alt!=0x3FFF; }  // max. value means "not valid"
+   void clrAlt(void)              { BasicPos.Alt=0x3FFF; }
 
-   int16_t getClimbWord(void) const                                                             //
-   { int16_t Word=Position[9]&0x7F; Word<<=2; Word|=Position[8]>>6; return Word; }
-   int16_t getClimb(void) const                                                                 // [0.125 m/s]
-   { return SignVRdecode<int16_t,6>(getClimbWord()); }
-   void setClimb(int16_t Climb)                                                                 // [0.125 m/s]
-   { setClimbWord(SignVRencode<int16_t,6>(Climb)); }
-   void setClimbWord(int16_t Word)
-   { Position[8] = (Position[8]&0x3F) | ((Word&0x03)<<6);
-     Position[9] = (Position[9]&0x80) |  (Word>>2); }
-   bool hasClimb(void) const { return getClimbWord()!=0x1FF; }                                  // climb-rate is valid ?
-   void clrClimb(void) { setClimbWord(0x1FF); }                                                 // declare climb-rate as absent
+   // int32_t getAlt(void) const                                                                   // [m]
+   // { int32_t Word=Position[8]&0x3F; Word<<=8; Word|=Position[7];
+   //   return UnsVRdecode<int32_t,12>(Word)-320; }
+   // void setAlt(int32_t Alt)
+   // { Alt+=320; if(Alt<0) Alt=0;
+   //   int32_t Word=UnsVRencode<uint32_t,12>(Alt);
+   //   Position[7]=Word;
+   //   Position[8] = (Position[8]&0xC0) | (Word>>8); }
+   // bool hasAlt(void) const { return (Position[8]&0x3F)!=0x3F || Position[7]!=0xFF; }            // is altitude valid ?
+   // void clrAlt(void) { Position[8]|=0x3F; Position[7]=0xFF; }                                   // declare invalid altitude
 
-   uint16_t getTrack(void) const                                                                // 9-bit cordic
-   { int16_t Word=Position[10]; Word<<=1; Word|=Position[9]>>7; return Word; }
-   void setTrack(int16_t Word)
-   { Position[9] = (Position[9]&0x7F) | ((Word&0x01)<<7);
-     Position[10] = Word>>1; }
+   int16_t getClimb(void) const { return SignVRdecode<int16_t,6>(BasicPos.Climb); }                // [0.125m/s]
+   void    setClimb(int16_t Climb) { BasicPos.Climb=SignVRencode<int16_t,6>(Climb); }
+   bool    hasClimb(void) const { return BasicPos.Climb!=0x1FF; }                                  // is climb-rate valid ?
+   void    clrClimb(void)              { BasicPos.Climb=0x1FF; }                                   // declare climb-rate as invalid
+
+   // int16_t getClimbWord(void) const                                                             //
+   // { int16_t Word=Position[9]&0x7F; Word<<=2; Word|=Position[8]>>6; return Word; }
+   // int16_t getClimb(void) const                                                                 // [0.125 m/s]
+   // { return SignVRdecode<int16_t,6>(getClimbWord()); }
+   // void setClimb(int16_t Climb)                                                                 // [0.125 m/s]
+   // { setClimbWord(SignVRencode<int16_t,6>(Climb)); }
+   // void setClimbWord(int16_t Word)
+   // { Position[8] = (Position[8]&0x3F) | ((Word&0x03)<<6);
+   //   Position[9] = (Position[9]&0x80) |  (Word>>2); }
+   // bool hasClimb(void) const { return getClimbWord()!=0x1FF; }                                  // climb-rate is valid ?
+   // void clrClimb(void) { setClimbWord(0x1FF); }                                                 // declare climb-rate as absent
+
+   uint16_t getTrack(void) const { return BasicPos.Track; }                                     // 9-bit cordic
+   void setTrack(uint16_t Track)        { BasicPos.Track=Track; }
+
+   // uint16_t getTrack(void) const                                                                // 9-bit cordic
+   // { int16_t Word=Position[10]; Word<<=1; Word|=Position[9]>>7; return Word; }
+   // void setTrack(int16_t Word)
+   // { Position[9] = (Position[9]&0x7F) | ((Word&0x01)<<7);
+   //   Position[10] = Word>>1; }
 
 // --------------------------------------------------------------------------------------------------------
 
@@ -534,6 +697,45 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
    { setLatOGN(RefLat+(LatDist*27)/5);
      LonDist = (LonDist<<12)/LatCos;                                  // LonDist/=cosine(Latitude)
      setLonOGN(RefLon+(LonDist*27)/5); }
+
+// --------------------------------------------------------------------------------------------------------
+
+   uint8_t WritePFLAA(char *NMEA, uint8_t Status, int32_t LatDist, int32_t LonDist, int32_t AltDist, const char *Call=0)
+   { uint8_t Len=0;
+     Len+=Format_String(NMEA+Len, "$PFLAA,");                             // sentence name and alarm-level (but no alarms for tracker>
+     NMEA[Len++]='0'+Status;
+     NMEA[Len++]=',';
+     Len+=Format_SignDec(NMEA+Len, LatDist);
+     NMEA[Len++]=',';
+     Len+=Format_SignDec(NMEA+Len, LonDist);
+     NMEA[Len++]=',';
+     Len+=Format_SignDec(NMEA+Len, AltDist);                              // [m] relative altitude
+     NMEA[Len++]=',';
+     uint8_t AddrType = getAddrType();
+// #ifdef WITH_SKYDEMON
+     if(AddrType==5) AddrType=1;
+                else AddrType=2;                                          // SkyDemon only accepts 1 or 2
+// #endif
+     NMEA[Len++]='0'+AddrType;                                            // address-type (3=OGN)
+     NMEA[Len++]=',';
+     uint32_t Addr = getAddress();                                        // [24-bit] address
+     Len+=Format_Hex(NMEA+Len, (uint8_t)(Addr>>16));                      // XXXXXX 24-bit address: RND, ICAO, FLARM, OGN
+     Len+=Format_Hex(NMEA+Len, (uint16_t)Addr);
+     if(Call) { NMEA[Len++]='|'; Len+=Format_String(NMEA+Len, Call); }
+     NMEA[Len++]=',';
+     Len+=Format_UnsDec(NMEA+Len, ((uint32_t)225*getTrack()+16)>>5, 2, 1); // [deg] heading (by GPS)
+     Len-=2;  // remove decimal
+     NMEA[Len++]=',';
+     NMEA[Len++]=',';
+     Len+=Format_UnsDec(NMEA+Len, ((uint32_t)getSpeed()*10+2)>>2, 2, 1);   // [m/s] ground speed
+     Len-=2;  // remove decimal
+     NMEA[Len++]=',';
+     Len+=Format_SignDec(NMEA+Len, ((int32_t)getClimb()*10+4)>>3, 2, 1, 1); // [m/s] climb/sink rate
+     NMEA[Len++]=',';
+     NMEA[Len++]=HexDigit(getAcftTypeOGN());                       // [0..F] aircraft-type: 1=glider, 2=tow plane, etc.
+     Len+=NMEA_AppendCheckCRNL(NMEA, Len);
+     NMEA[Len]=0;
+     return Len; }                                                        // return number of formatted characters
 
 // --------------------------------------------------------------------------------------------------------
 
@@ -604,6 +806,7 @@ class __attribute__((packed, aligned(4))) ADSL_Packet
      // Len+=Format_String(JSON+Len, ",\"acft_cat\":\"");
      // Len+=Format_Hex(JSON+Len, AcftCat);
      JSON[Len++]='\"';
+     if(isRelay()) Len+=Format_String(JSON+Len, ",\"relay\":1");
 
      Len+=Format_String(JSON+Len, ",\"lat_deg\":");
      Len+=Format_SignDec(JSON+Len, getLatUBX(), 8, 7, 1);

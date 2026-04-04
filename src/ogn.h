@@ -146,11 +146,14 @@ template <class OGNx_Packet>
    { uint8_t Flags;
      struct
      { uint8_t SNR : 6;        // [dB]
-       uint8_t Prot: 1;
-       uint8_t Rx  : 1;        // received or (own) transmitted ?
+       uint8_t Prot: 1;        // 0:OGN1, 1:ADSL
+       uint8_t Rx  : 1;        // 1:received 0:own transmitted
      } __attribute__((packed)) ;
    } ;
    uint8_t    Check;           // simple control sum
+
+  public:
+   uint8_t *PktByte(void) { return Packet.Byte(); }
 
    void     setTime(uint32_t EstTime) { Time = EstTime>>4; }
    uint32_t getTime(uint32_t EstTime) const
@@ -434,7 +437,7 @@ template <class OGNx_Packet=OGN1_Packet>
      int32_t AltDist = Packet.DecodeAltitude()-RefAlt;
      return WritePFLAA(NMEA, Status, LatDist, LonDist, AltDist, Status); }                   // return number of formatted characters
 
-   uint8_t WritePFLAA(char *NMEA, uint8_t Status, int32_t LatDist, int32_t LonDist, int32_t AltDist)
+   uint8_t WritePFLAA(char *NMEA, uint8_t Status, int32_t LatDist, int32_t LonDist, int32_t AltDist, const char *Call=0)
    { uint8_t Len=0;
      Len+=Format_String(NMEA+Len, "$PFLAA,");                             // sentence name and alarm-level (but no alarms for trackers)
      NMEA[Len++]='0'+Status;
@@ -446,14 +449,15 @@ template <class OGNx_Packet=OGN1_Packet>
      Len+=Format_SignDec(NMEA+Len, AltDist);                              // [m] relative altitude
      NMEA[Len++]=',';
      uint8_t AddrType = Packet.Header.AddrType;
-#ifdef WITH_SKYDEMON
+// #ifdef WITH_SKYDEMON
      if(AddrType!=1) AddrType=2;                                          // SkyDemon only accepts 1 or 2
-#endif
+// #endif
      NMEA[Len++]='0'+AddrType;                                            // address-type (3=OGN)
      NMEA[Len++]=',';
      uint32_t Addr = Packet.Header.Address;                               // [24-bit] address
      Len+=Format_Hex(NMEA+Len, (uint8_t)(Addr>>16));                      // XXXXXX 24-bit address: RND, ICAO, FLARM, OGN
      Len+=Format_Hex(NMEA+Len, (uint16_t)Addr);
+     if(Call) { NMEA[Len++]='|'; Len+=Format_String(NMEA+Len, Call); }
      NMEA[Len++]=',';
      Len+=Format_UnsDec(NMEA+Len, (uint32_t)Packet.DecodeHeading(), 4, 1);          // [deg] heading (by GPS)
      NMEA[Len++]=',';
@@ -1008,6 +1012,7 @@ class GPS_Position: public GPS_Time
      Altitude=0; GeoidSeparation=0;
      Speed=0; Heading=0; ClimbRate=0; TurnRate=0;
      Temperature=0; Pressure=0; StdAltitude=0; Humidity=0;
+     PredResid=0; LockTime=0;
      NMEAframes=0; NMEAerrors=0; }
 
    bool isValid(void) const                          // is GPS data is valid = GPS lock
