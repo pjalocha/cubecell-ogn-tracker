@@ -1071,6 +1071,7 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
   if(!OK || Len==0) return 0;
   if(Pos)
   { bool Send=Mesht_GPS.TimeDistLimit(Mesht_RefGPS);
+    // Serial.printf("TimeDistLimit() => %d\n", Send);
     if(!Send) return 0;
     Mesht_RefGPS=Mesht_GPS; }
   Packet->Len=Packet->HeaderSize+Len;
