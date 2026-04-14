@@ -1060,19 +1060,20 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
   static uint8_t InfoBackOff=0;
   int Len=0;
   OK=getMeshtGPS(Position);                                              // get the GPS position or at least the time
-  if(OK) Len=MeshtProto::EncodeGPS(Packet->getMeshtMsg(), Mesht_GPS);
+  if(OK) Len=MeshtProto::EncodeGPS(Packet->getMeshtMsg(), Mesht_GPS);    // try to encode the GPS position
   bool Pos=OK;
-  if(InfoBackOff) InfoBackOff--;
+  // if(InfoBackOff) InfoBackOff--; // moved down
   if(!OK || InfoBackOff==0)                                              // decide to send NodeInfo instead of position
-  { OK=getMeshNodeInfo();
+  { OK=getMeshNodeInfo();                                                //
     if(OK) Len=MeshtProto::EncodeNodeInfo(Packet->getMeshtMsg(), Mesht_NodeInfo);
     InfoBackOff = 7+Random.RX%5;
     Pos=0; }
   if(!OK || Len==0) return 0;
-  if(Pos)
+  if(Pos)                                                                // if this is a position packet
   { bool Send=Mesht_GPS.TimeDistLimit(Mesht_RefGPS);
     // Serial.printf("TimeDistLimit() => %d\n", Send);
     if(!Send) return 0;
+    if(InfoBackOff) InfoBackOff--;
     Mesht_RefGPS=Mesht_GPS; }
   Packet->Len=Packet->HeaderSize+Len;
   Packet->Header.PktID ^= MeshtHash(Packet->Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
