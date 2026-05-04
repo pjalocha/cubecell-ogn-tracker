@@ -1075,6 +1075,7 @@ static int getMeshtPacket(MESHT_Packet *Packet, const GPS_Position *Position)
     if(!Send) return 0;
     if(InfoBackOff) InfoBackOff--;
     Mesht_RefGPS=Mesht_GPS; }
+  // Serial.printf("getMeshtPacket() Pos:%d InfoBackOff:%d\n", Pos, InfoBackOff);
   Packet->Len=Packet->HeaderSize+Len;
   Packet->Header.PktID ^= MeshtHash(Packet->Header.Src+Mesht_GPS.Time);  // scramble packet-ID by the hash of MAC and Time
   OK=Packet->encryptMeshtMsg(AES);
@@ -1464,11 +1465,11 @@ static uint32_t RxPktCount=0;
 static uint8_t  PlanEU = 0;
 static uint8_t  HopChan = 0;
 
-#ifdef WITH_ADSL
-const uint16_t SlotSwitchTime=900;           // [ms]
-#else
+// #ifdef WITH_ADSL
+// const uint16_t SlotSwitchTime=800;           // [ms]
+// #else
 const uint16_t SlotSwitchTime=800;           // [ms]
-#endif
+// #endif
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
 { GhostSilent = Parameters.GhostMode && Radio_RxCount64==0; // ghost-silence when ghost-mode and no traffic
@@ -1631,8 +1632,8 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   //            Radio_SysID, Radio_Channel, TxPos, TxRssiThres, TxPktCount);
   Radio.RxBoosted(0);
   XorShift64(Random.Word);
-  TxTime0 = Random.RX  % 97;                                 // transmit times within slots
-  TxTime1 = Random.GPS % 99;
+  TxTime0 = Random.RX  % 197;                                 // transmit times within slots
+  TxTime1 = Random.GPS % 199;
   TxPkt0=TxPkt1=0;
   if(TxPos && !GhostSilent) TxPkt0 = TxPkt1 = &TxPosPacket;
   XorShift64(Random.Word);
@@ -1678,7 +1679,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   }
 #endif
   TxTime0 += 400;                                                  // transmission time in the 1st slot
-  TxTime1 += 800;                                                  // transmission time in the 2nd slot
+  TxTime1 += SlotSwitchTime;                                       // transmission time in the 2nd slot
   LED_OFF(); }
 
 static void PPS_SoftEdge(uint32_t msTime, uint32_t msDelay)
@@ -1743,12 +1744,12 @@ void loop()
       GPS_State.BurstDone=1; }
   }
 
-  uint32_t SysTime = millis() - GPS_PPS_ms;
+  uint32_t SysTime = millis() - GPS_PPS_ms;                     // [ms] time since PPS
   if(Radio_Slot==0)                                             // while in the 1st sub-slot
   { if(TxPkt0 && SysTime>=TxTime0 && !Radio_TxRunning())        //
     { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
       if(RxRssi<=TxRssiThres)
-      { int TxLen=0; // Serial.printf("1\n");
+      { int TxLen=0; // Serial.printf("Slot #1 Tx:%10u SysTime:%4u/%4u [ms] Sys:%d\n", millis(), SysTime, TxTime0, Radio_SysID);
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
         { if(Radio_SysID==Radio_SysID_LDR) TxLen=LDR_Transmit(ADSL_TxPacket);
@@ -1793,10 +1794,10 @@ void loop()
       // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
   } else                                                          // while in the 2nd sub-slot
-  { if(TxPkt1 && SysTime >= TxTime1 && !Radio_TxRunning())        // if there is a packet to transmit and time has come
+  { if(TxPkt1 && SysTime>=TxTime1 && !Radio_TxRunning())          // if there is a packet to transmit and time has come
     { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi);   // [dBm] probe channel RSSI level
       if(RxRssi<=TxRssiThres)
-      { int TxLen=0; // Serial.printf("2\n");
+      { int TxLen=0; // Serial.printf("Slot #2 Tx:%10u SysTime:%4u/%4u [ms] Sys:%d\n", millis(), SysTime, TxTime1, Radio_SysID);
 #ifdef WITH_ADSL
         if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
         { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
