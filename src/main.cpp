@@ -1463,6 +1463,9 @@ static void ADSL_TxDone(void)
   ADSL_TxPkt=0;
 #endif
   ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0; }
+
+static void ADSL_TxDoneHDR(void)
+{ ADSL_TxHDR=0; }
 #ifdef WITH_FANET
 static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
 static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
@@ -1662,12 +1665,12 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
 #ifdef WITH_ADSL
   if(PlanEU)
   { uint8_t TxChan=HopChan;
-    ADSL_TxHDR = ADSL_TxPkt && TxChan==3;
+    ADSL_TxHDR = ADSL_TxPkt!=0;
     if(TxChan>2) TxChan=2;
     SelectDirectRFslot(0, TxChan);
     SelectDirectRFslot(1, TxChan);
-    ADSL_TxSlot0 = ADSL_TxPkt && !ADSL_TxHDR && RF_SysID[0]!=Radio_SysID_OGN_ADSL;
-    ADSL_TxSlot1 = ADSL_TxPkt && !ADSL_TxHDR && RF_SysID[1]!=Radio_SysID_OGN_ADSL; }
+    ADSL_TxSlot0 = ADSL_TxPkt && RF_SysID[0]!=Radio_SysID_OGN_ADSL;
+    ADSL_TxSlot1 = ADSL_TxPkt && RF_SysID[1]!=Radio_SysID_OGN_ADSL; }
   else
   { ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0;
     SelectDirectRFslot(0, 0);
@@ -1809,7 +1812,7 @@ void loop()
       if(RxRssi<=TxRssiThres)
       { HDR_Transmit(ADSL_TxPacket);
         TxPktCount++;
-        ADSL_TxDone(); }
+        ADSL_TxDoneHDR(); }
     }
 #endif
     if(SysTime>=Slot1_Start)
