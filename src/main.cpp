@@ -1447,7 +1447,7 @@ static ADSL_Packet ADSL_TxPacket;              // ADS-L packet to be transmitted
 
 // static bool GPS_Done = 0;                   // State: 1 = GPS is sending data, 0 = GPS sent all data, waiting for the next PPS
 
-static uint32_t TxTime0, TxTime1;           // transmision times for the two slots
+static uint32_t TxTimeHDR, TxTime0, TxTime1; // transmision times for the slots
 static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1; // OGN packets to transmit in the 1st and 2nd sub-slot
 static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signature corresponds to
 #ifdef WITH_ADSL
@@ -1483,8 +1483,9 @@ static uint8_t  RF_Phase = 1;               // 0=HDR slot, 1=1st direct sub-slot
 static uint8_t  RF_SysID[2] = { Radio_SysID_OGN_ADSL, Radio_SysID_OGN_ADSL };
 static uint8_t  RF_Channel[2] = { 0, 1 };
 
-const uint16_t Slot1_Start = 450;            // [ms] start of the first direct MDR/LDR slot
-const uint16_t Slot2_Start = 825;            // [ms] start of the second direct MDR/LDR slot
+const uint16_t SlotHDR_Start = 200;          // [ms] earliest HDR transmission time
+const uint16_t Slot1_Start   = 450;          // [ms] start of the first direct MDR/LDR slot
+const uint16_t Slot2_Start   = 825;          // [ms] start of the second direct MDR/LDR slot
 
 static void ConfigureRF(uint8_t SysID, uint8_t Channel)
 { Radio_SysID=SysID;
@@ -1677,6 +1678,10 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   // Serial.printf("RFslot Sys:%d Chan:%d TxPos:%d RssiThres:%+d TxPkt:%d\n",
   //            Radio_SysID, Radio_Channel, TxPos, TxRssiThres, TxPktCount);
   XorShift64(Random.Word);
+  { uint32_t TxLow = millis()-GPS_PPS_ms;
+    if(TxLow<SlotHDR_Start) TxLow=SlotHDR_Start;
+    if(TxLow<Slot1_Start) TxTimeHDR = TxLow + (Random.RX % (Slot1_Start-TxLow));
+    else { TxTimeHDR=Slot1_Start; ADSL_TxHDR=0; } }
   TxTime0 = Random.RX  % 197;                                 // transmit times within slots
   TxTime1 = Random.GPS % 199;
   TxPkt0=TxPkt1=0;
@@ -1792,7 +1797,7 @@ void loop()
   if(RF_Phase==0)                                               // early O-band HDR slot
   {
 #ifdef WITH_ADSL
-    if(ADSL_TxPkt && ADSL_TxHDR && SysTime<Slot1_Start && !Radio_TxRunning())
+    if(ADSL_TxPkt && ADSL_TxHDR && SysTime>=TxTimeHDR && SysTime<Slot1_Start && !Radio_TxRunning())
     { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
       if(RxRssi<=TxRssiThres)
       { HDR_Transmit(ADSL_TxPacket);
