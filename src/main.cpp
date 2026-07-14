@@ -1456,6 +1456,13 @@ static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
 static bool ADSL_TxHDR=0;                   // transmit ADS-L in the early HDR slot ?
 static bool ADSL_TxSlot0=0;                 // transmit ADS-L in the 1st direct sub-slot ?
 static bool ADSL_TxSlot1=0;                 // transmit ADS-L in the 2nd direct sub-slot ?
+
+static void ADSL_TxDone(void)
+{
+#ifdef WITH_ADSL
+  ADSL_TxPkt=0;
+#endif
+  ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0; }
 #ifdef WITH_FANET
 static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
 static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
@@ -1802,7 +1809,7 @@ void loop()
       if(RxRssi<=TxRssiThres)
       { HDR_Transmit(ADSL_TxPacket);
         TxPktCount++;
-        ADSL_TxHDR=0; }
+        ADSL_TxDone(); }
     }
 #endif
     if(SysTime>=Slot1_Start)
@@ -1819,7 +1826,7 @@ void loop()
         { if(Radio_SysID==Radio_SysID_LDR) TxLen=LDR_Transmit(ADSL_TxPacket);
                                       else TxLen=ADSL_ManchTx(ADSL_TxPacket);
           TxPktCount++;
-          ADSL_TxSlot0=0; }
+          ADSL_TxDone(); }
         else
 #endif
         { TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; /* Serial.printf("OGN #0\n"); */ }
@@ -1854,7 +1861,7 @@ void loop()
         { if(Radio_SysID==Radio_SysID_LDR) TxLen=LDR_Transmit(ADSL_TxPacket);
                                       else TxLen=ADSL_ManchTx(ADSL_TxPacket);
           TxPktCount++;
-          ADSL_TxSlot1=0; }
+          ADSL_TxDone(); }
         else
 #endif
         { TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; /* Serial.printf("OGN #1\n"); */ }
