@@ -1105,7 +1105,7 @@ static int getPosPacket(OGN1_Packet &Packet, const GPS_Position &GPS)  // encode
 
 #ifdef WITH_ADSL
 static void Radio_RxProcADSL(FSK_RxPacket *RxPkt)
-{ if(RxPkt->Bytes!=24 || RxPkt->Manchester) return;
+{ if(RxPkt->Bytes!=24) return;
   uint8_t RxPacketIdx  = ADSL_RelayQueue.getNew();                   // get place for this new packet
   ADSL_RxPacket *RxPacket = ADSL_RelayQueue[RxPacketIdx];
   int CorrErr=RxPkt->ErrCount();
@@ -1159,6 +1159,18 @@ static void Radio_RxProcLDR(FSK_RxPacket *RxPkt)
   // if(PAW_Packet::IntCRC(RxPkt->Data, 24)!=0x00) return;
   /// for now we drop PAW packets
 }
+
+static void Radio_RxProcHDR(FSK_RxPacket *RxPkt)
+{ if(RxPkt->Bytes!=24 || RxPkt->Manchester) return;
+  uint32_t CRC24 = ADSL_Packet::checkCRC24(RxPkt->Data, 24);
+  if(CRC24!=0x000000)
+  { uint8_t ErrBit=ADSL_Packet::FindCRC24syndrome(CRC24);
+    if(ErrBit!=0xFF)
+    { ADSL_Packet::FlipBit(RxPkt->Data, ErrBit);
+      ADSL_Packet::FlipBit(RxPkt->Err , ErrBit);
+      CRC24 ^= ADSL_Packet::CRC24syndrome(ErrBit); }
+  }
+  if(CRC24==0x000000) Radio_RxProcADSL(RxPkt); }
 #endif
 
 static void Radio_RxProcOGN(FSK_RxPacket *RxPkt)
@@ -1203,6 +1215,7 @@ static void Radio_RxProcess(void)                                      // proces
   if(RxPkt->SysID==Radio_SysID_OGN) Radio_RxProcOGN(RxPkt);            // process OGN packet
 #if WITH_ADSL
   else if(RxPkt->SysID==Radio_SysID_LDR) Radio_RxProcLDR(RxPkt);
+  else if(RxPkt->SysID==Radio_SysID_HDR) Radio_RxProcHDR(RxPkt);
   else if(RxPkt->SysID==Radio_SysID_ADSL) Radio_RxProcADSL(RxPkt);          // process ADS-L packet
 #endif
   RxFIFO.Read();
@@ -1439,8 +1452,10 @@ static OGN_TxPacket<OGN1_Packet> *TxPkt0, *TxPkt1; // OGN packets to transmit in
 static OGN_TxPacket<OGN1_Packet> *SignTxPkt=0;  // which OGN packet the signature corresponds to
 #ifdef WITH_ADSL
 static OGN_TxPacket<OGN1_Packet> *ADSL_TxPkt=0; // ADS-L packet to transmit
-static bool ADSL_TxSlot=0;                  // transmit ADS-L in the 1st of 2nd sub-slot ?
 #endif
+static bool ADSL_TxHDR=0;                   // transmit ADS-L in the early HDR slot ?
+static bool ADSL_TxSlot0=0;                 // transmit ADS-L in the 1st direct sub-slot ?
+static bool ADSL_TxSlot1=0;                 // transmit ADS-L in the 2nd direct sub-slot ?
 #ifdef WITH_FANET
 static FANET_Packet FNT_TxPacket;            // FANET packet to transmit
 static uint32_t FNT_Freq = 0;                // [Hz] if zero then transmission not scheduled for given slot
@@ -1464,12 +1479,36 @@ static uint32_t RxPktCount=0;
 
 static uint8_t  PlanEU = 0;
 static uint8_t  HopChan = 0;
+static uint8_t  RF_Phase = 1;               // 0=HDR slot, 1=1st direct sub-slot, 2=2nd direct sub-slot
+static uint8_t  RF_SysID[2] = { Radio_SysID_OGN_ADSL, Radio_SysID_OGN_ADSL };
+static uint8_t  RF_Channel[2] = { 0, 1 };
 
-// #ifdef WITH_ADSL
-// const uint16_t SlotSwitchTime=800;           // [ms]
-// #else
-const uint16_t SlotSwitchTime=800;           // [ms]
-// #endif
+const uint16_t Slot1_Start = 450;            // [ms] start of the first direct MDR/LDR slot
+const uint16_t Slot2_Start = 825;            // [ms] start of the second direct MDR/LDR slot
+
+static void ConfigureRF(uint8_t SysID, uint8_t Channel)
+{ Radio_SysID=SysID;
+  Radio_Channel=Channel;
+  Radio_TxConfig(Radio_SysID);
+  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
+  Radio_RxConfig(Radio_SysID);
+  Radio.RxBoosted(0); }
+
+static void ConfigureDirectRFslot(uint8_t Slot)
+{ Radio_Slot=Slot;
+  ConfigureRF(RF_SysID[Slot], RF_Channel[Slot]); }
+
+static void SelectDirectRFslot(uint8_t Slot, uint8_t TxChan)
+{ uint8_t FLR_Chan = Radio_FreqPlan.getChannel(GPS_PPS_UTC, Slot, 0);
+  uint8_t OGN_Chan = Radio_FreqPlan.getChannel(GPS_PPS_UTC, Slot, 1);
+  RF_Channel[Slot]=TxChan;
+  if(PlanEU)
+  {      if(TxChan==OGN_Chan) RF_SysID[Slot]=Radio_SysID_OGN_ADSL;
+    else if(TxChan==FLR_Chan) RF_SysID[Slot]=Radio_SysID_FLR_ADSL;
+    else                      RF_SysID[Slot]=Radio_SysID_LDR; }
+  else
+  { RF_Channel[Slot]=OGN_Chan;
+    RF_SysID[Slot]=Radio_SysID_OGN_ADSL; } }
 
 static void StartRFslot(void)                // start the TX/RX time slot right after the GPS stops sending data
 { GhostSilent = Parameters.GhostMode && Radio_RxCount64==0; // ghost-silence when ghost-mode and no traffic
@@ -1481,6 +1520,10 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
 
   // Serial.printf("StartRFslot()\n");
   XorShift64(Random.Word);
+#ifdef WITH_ADSL
+  ADSL_TxPkt=0;
+#endif
+  ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0;
   GPS_Position &GPS = GPS_Pipe[GPS_Ptr];
   GPS_Satellites = GPS.Satellites;
   GPS_State.TimeValid = GPS.isTimeValid();
@@ -1593,7 +1636,7 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
       getAdslPacket(ADSL_TxPacket, GPS);                      // get ADS-L position or other packet
       ADSL_TxPacket.Scramble();                               //
       ADSL_TxPacket.setCRC24();
-      ADSL_TxSlot = Random.GPS&0x20; }                        // which slot should ADS-L be transmitted in
+      ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0; }
     else ADSL_TxPkt=0;
 #endif
     TxPos=1; }                                                // position is ready for transmission
@@ -1608,29 +1651,31 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
   for( ; Wait>0; Wait--)              // wait for FANET/MESHT transmission to complete
   { if(!Radio_TxRunning()) break;
     delay(1); }
-  Radio_Slot=0;                                              // setup for 1st slot
 #ifdef WITH_ADSL
-  if(PlanEU && HopChan<=2)                                   //
-  { if(HopChan==2) Radio_SysID=Radio_SysID_LDR;
-              else Radio_SysID=Radio_SysID_OGN_ADSL;
-    Radio_Channel=HopChan;
-    ADSL_TxSlot=0; }
+  if(PlanEU)
+  { uint8_t TxChan=HopChan;
+    ADSL_TxHDR = ADSL_TxPkt && TxChan==3;
+    if(TxChan>2) TxChan=2;
+    SelectDirectRFslot(0, TxChan);
+    SelectDirectRFslot(1, TxChan);
+    ADSL_TxSlot0 = ADSL_TxPkt && !ADSL_TxHDR && RF_SysID[0]!=Radio_SysID_OGN_ADSL;
+    ADSL_TxSlot1 = ADSL_TxPkt && !ADSL_TxHDR && RF_SysID[1]!=Radio_SysID_OGN_ADSL; }
   else
-  { Radio_SysID=Radio_SysID_OGN_ADSL;                                      // receive OGN and ADS-L in parallel
-    Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1); } // which channel to work on ?
-  // Serial.printf("EU:%d Radio_SysID:%d Radio_Channel:%d\n", Radio_SysID, Radio_Channel, PlanEU);
-  Radio_TxConfig(Radio_SysID);                                             //
-  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
+  { ADSL_TxHDR=ADSL_TxSlot0=ADSL_TxSlot1=0;
+    SelectDirectRFslot(0, 0);
+    SelectDirectRFslot(1, 1); }
+  // Serial.printf("EU:%d Hop:%d HDR:%d Slot0:%d/%d Slot1:%d/%d\n",
+  //               PlanEU, HopChan, ADSL_TxHDR, RF_SysID[0], RF_Channel[0], RF_SysID[1], RF_Channel[1]);
+  RF_Phase=0;
+  ConfigureRF(Radio_SysID_HDR, 2);                                      // early O-band HDR slot
 #else
-  Radio_SysID=Radio_SysID_OGN_ADSL;                          // receive OGN and ADS-L in parallel
-  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1); // which channel to work on ?
-  Radio_TxConfig(Radio_SysID);                               //
-  Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));
+  SelectDirectRFslot(0, 0);
+  SelectDirectRFslot(1, 1);
+  RF_Phase=1;
+  ConfigureDirectRFslot(0);
 #endif
-  Radio_RxConfig(Radio_SysID);
   // Serial.printf("RFslot Sys:%d Chan:%d TxPos:%d RssiThres:%+d TxPkt:%d\n",
   //            Radio_SysID, Radio_Channel, TxPos, TxRssiThres, TxPktCount);
-  Radio.RxBoosted(0);
   XorShift64(Random.Word);
   TxTime0 = Random.RX  % 197;                                 // transmit times within slots
   TxTime1 = Random.GPS % 199;
@@ -1652,7 +1697,6 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
       InfoTxBackOff = GhostSilent ? 2+Random.RX%3:15 + Random.RX%3;          // 16+/-1
     }
   }
-  if(GhostSilent && ADSL_TxPkt) ADSL_TxPkt = &TxInfoPacket;
   XorShift64(Random.Word);
   static uint8_t RelayTxBackOff=0;
   if(RelayTxBackOff) RelayTxBackOff--;
@@ -1678,8 +1722,8 @@ static void StartRFslot(void)                // start the TX/RX time slot right 
       SignTxBackOff = 6 + (Random.RX%7); }
   }
 #endif
-  TxTime0 += 400;                                                  // transmission time in the 1st slot
-  TxTime1 += SlotSwitchTime;                                       // transmission time in the 2nd slot
+  TxTime0 += Slot1_Start;                                          // transmission time in the 1st direct slot
+  TxTime1 += Slot2_Start;                                          // transmission time in the 2nd direct slot
   LED_OFF(); }
 
 static void PPS_SoftEdge(uint32_t msTime, uint32_t msDelay)
@@ -1745,16 +1789,32 @@ void loop()
   }
 
   uint32_t SysTime = millis() - GPS_PPS_ms;                     // [ms] time since PPS
-  if(Radio_Slot==0)                                             // while in the 1st sub-slot
-  { if(TxPkt0 && SysTime>=TxTime0 && !Radio_TxRunning())        //
+  if(RF_Phase==0)                                               // early O-band HDR slot
+  {
+#ifdef WITH_ADSL
+    if(ADSL_TxPkt && ADSL_TxHDR && SysTime<Slot1_Start && !Radio_TxRunning())
+    { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
+      if(RxRssi<=TxRssiThres)
+      { HDR_Transmit(ADSL_TxPacket);
+        TxPktCount++;
+        ADSL_TxHDR=0; }
+    }
+#endif
+    if(SysTime>=Slot1_Start)
+    { RF_Phase=1;
+      ConfigureDirectRFslot(0); }
+  }
+  if(RF_Phase==1)                                               // while in the 1st direct sub-slot
+  { if((ADSL_TxSlot0 || (TxPkt0 && RF_SysID[0]==Radio_SysID_OGN_ADSL)) && SysTime>=TxTime0 && !Radio_TxRunning())
     { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi); // [dBm]
       if(RxRssi<=TxRssiThres)
       { int TxLen=0; // Serial.printf("Slot #1 Tx:%10u SysTime:%4u/%4u [ms] Sys:%d\n", millis(), SysTime, TxTime0, Radio_SysID);
 #ifdef WITH_ADSL
-        if(ADSL_TxPkt==TxPkt0 && ADSL_TxSlot==0)
+        if(ADSL_TxPkt && ADSL_TxSlot0)
         { if(Radio_SysID==Radio_SysID_LDR) TxLen=LDR_Transmit(ADSL_TxPacket);
                                       else TxLen=ADSL_ManchTx(ADSL_TxPacket);
-          TxPktCount++; }
+          TxPktCount++;
+          ADSL_TxSlot0=0; }
         else
 #endif
         { TxLen=OGN_ManchTx(*TxPkt0); TxPktCount++; /* Serial.printf("OGN #0\n"); */ }
@@ -1764,7 +1824,7 @@ void loop()
       else                   // if channel RSSI too high then retry TX in 10..40 ms
       { TxTime0 += 10+Random.RX%29; TxRssiThres+=2; }
     }
-    if(SysTime>=SlotSwitchTime)                                        // if 800ms from PPS then switch to the 2nd sub-slot
+    if(SysTime>=Slot2_Start)                                           // switch to the 2nd direct sub-slot
     {
 #ifdef WITH_TestLDR  // is not working... weird transmission appears on 869.525MHz
       // Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
@@ -1775,32 +1835,21 @@ void loop()
         // Serial.printf(" => TxLDR");
         delay(10); }
 #endif
-#ifdef WITH_TestHDR  // is working fine and being received on ogn-tracker
-      // Serial.printf("Slot #1 ADS-L:%c Plan:%d", ADSL_TxPkt?'Y':'N', Radio_FreqPlan.Plan);
-      if(ADSL_TxPkt && PlanEU)
-      { Radio_TxConfig(Radio_SysID_HDR);  // this is already contained in HDR_Transmit() ?
-        Radio.SetChannel(Radio_FreqPlan.getFreqOBAND());
-        HDR_Transmit(ADSL_TxPacket);
-        // Serial.printf(" => TxHDR");
-        delay(2); }
-      // Serial.printf("\n");
-#endif
-      Radio_Slot=1;
-      Radio_TxConfig(Radio_SysID);                                          // setup for current system
-      Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);  // channel number
-      Radio.SetChannel(Radio_FreqPlan.getChanFrequency(Radio_Channel));     // [Hz] frequency
-      Radio_RxConfig(Radio_SysID);
-      Radio.RxBoosted(0);
+      RF_Phase=2;
+      ConfigureDirectRFslot(1);
       // Serial.printf("Slot #1: %d\r\n", SysTime);
     }
-  } else                                                          // while in the 2nd sub-slot
-  { if(TxPkt1 && SysTime>=TxTime1 && !Radio_TxRunning())          // if there is a packet to transmit and time has come
+  } else if(RF_Phase==2)                                         // while in the 2nd direct sub-slot
+  { if((ADSL_TxSlot1 || (TxPkt1 && RF_SysID[1]==Radio_SysID_OGN_ADSL)) && SysTime>=TxTime1 && !Radio_TxRunning())
     { int16_t RxRssi=Radio.Rssi(MODEM_FSK); RxRssiProc(RxRssi);   // [dBm] probe channel RSSI level
       if(RxRssi<=TxRssiThres)
       { int TxLen=0; // Serial.printf("Slot #2 Tx:%10u SysTime:%4u/%4u [ms] Sys:%d\n", millis(), SysTime, TxTime1, Radio_SysID);
 #ifdef WITH_ADSL
-        if(ADSL_TxPkt==TxPkt1 && ADSL_TxSlot==1)
-        { TxLen=ADSL_ManchTx(ADSL_TxPacket); TxPktCount++; }
+        if(ADSL_TxPkt && ADSL_TxSlot1)
+        { if(Radio_SysID==Radio_SysID_LDR) TxLen=LDR_Transmit(ADSL_TxPacket);
+                                      else TxLen=ADSL_ManchTx(ADSL_TxPacket);
+          TxPktCount++;
+          ADSL_TxSlot1=0; }
         else
 #endif
         { TxLen=OGN_ManchTx(*TxPkt1); TxPktCount++; /* Serial.printf("OGN #1\n"); */ }
@@ -1813,4 +1862,3 @@ void loop()
   }
 
 }
-

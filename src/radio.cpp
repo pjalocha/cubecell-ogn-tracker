@@ -40,14 +40,12 @@ static void Radio_TxDone(void)         // is called when transmission completes
 { // Serial.printf("%d: Radio_TxDone()\n", millis());
   Radio_TxConfig(Radio_SysID);
   Radio_RxConfig(Radio_SysID);         // refresh the receiver configuration
-  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
 static void Radio_TxTimeout(void)       // never happens, not clear under which conditions.
 { // Serial.printf("%d: Radio_TxTimeout()\n", millis());
   Radio_TxConfig(Radio_SysID);
   Radio_RxConfig(Radio_SysID);
-  Radio_Channel=Radio_FreqPlan.getChannel(GPS_PPS_UTC, Radio_Slot, 1);
   Radio.RxBoosted(0); }
 
 static void Radio_RxTimeout(void)       // end-of-receive-period: not used for now
@@ -72,7 +70,7 @@ static void Radio_RxDone( uint8_t *Packet, uint16_t Size, int16_t RSSI, int8_t S
   RxPkt->msTime  = msTime-GPS_PPS_ms;                                   // [ms] time since PPS
   RxPkt->Channel = Radio_Channel;                                         // [ ] channel
   RxPkt->SysID   = Radio_SysID;
-  RxPkt->Manchester = RxPkt->SysID!=Radio_SysID_LDR;                   // LDR is not Manchester encoded
+  RxPkt->Manchester = RxPkt->SysID!=Radio_SysID_LDR && RxPkt->SysID!=Radio_SysID_HDR; // LDR/HDR are not Manchester encoded
   // Serial.printf("%02d.%4d: Radio_RxDone(, %d, , ) RSSI:%2d, SysID:%X Chan:%d\n",
   //         RxPkt->Time%60, RxPkt->msTime, Size, RxPkt->RSSI/2, RxPkt->SysID, RxPkt->Channel);
   if(RxPkt->Manchester)
